@@ -199,6 +199,34 @@ input:checked + .switch-slider:before {
   transform: translateX(20px);
 }
 
+/* ▼▼▼ ここから追加 ▼▼▼ */
+.segmented-control {
+    display: flex;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.segmented-control input[type="radio"] {
+    display: none;
+}
+.segmented-control label {
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+    text-align: center;
+    flex-grow: 1;
+}
+.segmented-control label:not(:last-child) {
+    border-right: 1px solid var(--border-color);
+}
+.segmented-control input[type="radio"]:checked + label {
+    background-color: var(--accent-color);
+    color: white;
+}
+/* ▲▲▲ ここまで追加 ▲▲▲ */
+
+
 .footer {
   text-align: center;
   font-size: 11px;
@@ -207,3 +235,4 @@ input:checked + .switch-slider:before {
   padding-top: 8px;
   border-top: 1px solid var(--border-color);
 }
+

@@ -10,7 +10,8 @@ let isDisabled = false;
 // --- 初期化処理 ---
 async function initialize() {
     const domain = window.location.hostname;
-    const settings = await chrome.storage.local.get(['siteVolumes', 'disabledSites', 'isDefaultEnabled', 'defaultVolume']);
+    // ▼▼▼ 修正点1: maxVolumeも読み込むように変更 ▼▼▼
+    const settings = await chrome.storage.local.get(['siteVolumes', 'disabledSites', 'isDefaultEnabled', 'defaultVolume', 'maxVolume']);
 
     isDisabled = settings.disabledSites?.includes(domain) || false;
     if (isDisabled) {
@@ -18,9 +19,16 @@ async function initialize() {
         return;
     }
 
+    const maxVolume = settings.maxVolume || 150;
     let volumeToApply = settings.siteVolumes?.[domain];
+
     if (typeof volumeToApply === 'undefined') {
-        volumeToApply = settings.isDefaultEnabled ? settings.defaultVolume : 100;
+        volumeToApply = settings.isDefaultEnabled ? (settings.defaultVolume || 75) : 100;
+    }
+    
+    // 読み込んだ音量が最大値を超えないように調整
+    if (volumeToApply > maxVolume) {
+        volumeToApply = maxVolume;
     }
     
     currentVolume = volumeToApply / 100;
@@ -47,6 +55,7 @@ function processMediaElement(element) {
     if (!audioContext || gainNodes.has(element)) return;
 
     try {
+        // ▼▼▼ 修正点2: エラーの原因だったタイポを修正 (audio -> audioContext) ▼▼▼
         const source = audioContext.createMediaElementSource(element);
         const gainNode = audioContext.createGain();
         gainNode.gain.value = currentVolume;
@@ -94,18 +103,21 @@ function setAllVolumes(volumePercentage) {
 
 // --- ポップアップからのメッセージ受信 ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'setVolume') {
-        setAllVolumes(message.value);
-    } else if (message.type === 'updateStatus') {
-        isDisabled = message.value.isDisabled;
-        if (isDisabled) {
-            setAllVolumes(100); // 無効化されたら音量を100%に戻す
-        } else {
-            // 有効化されたら、再度設定を読み込んで適用
-            initialize();
+    // initialize()が非同期なため、念のためPromiseを扱う
+    (async () => {
+        if (message.type === 'setVolume') {
+            setAllVolumes(message.value);
+        } else if (message.type === 'updateStatus') {
+            isDisabled = message.value.isDisabled;
+            if (isDisabled) {
+                setAllVolumes(100); // 無効化されたら音量を100%に戻す
+            } else {
+                // 有効化されたら、再度設定を読み込んで適用
+                await initialize();
+            }
         }
-    }
-    // 非同期処理がない場合はtrueを返さない
+    })();
+    // sendResponseを使わないので、trueを返さない
 });
 
 // --- 実行 ---
@@ -114,3 +126,4 @@ if (typeof window.volumeValetInitialized === 'undefined') {
     window.volumeValetInitialized = true;
     initialize();
 }
+

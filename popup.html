@@ -37,6 +37,21 @@
                         <span class="switch-slider"></span>
                     </label>
                 </div>
+
+                <!-- ▼▼▼ ここから追加 ▼▼▼ -->
+                <div class="setting-row">
+                    <label class="toggle-label">最大音量</label>
+                    <div class="segmented-control" id="max-volume-selector">
+                        <input type="radio" id="max150" name="max_volume" value="150" checked>
+                        <label for="max150">150%</label>
+                        <input type="radio" id="max300" name="max_volume" value="300">
+                        <label for="max300">300%</label>
+                        <input type="radio" id="max600" name="max_volume" value="600">
+                        <label for="max600">600%</label>
+                    </div>
+                </div>
+                <!-- ▲▲▲ ここまで追加 ▲▲▲ -->
+
                 <div class="setting-row">
                     <label for="default-enabled-toggle" class="toggle-label">デフォルト音量を設定</label>
                     <label class="switch">
@@ -53,9 +68,10 @@
         </main>
 
         <footer class="footer">
-            <p>Ver 1.0.0</p>
+            <p>Ver 1.1.0</p>
         </footer>
     </div>
     <script src="popup.js"></script>
 </body>
 </html>
+
