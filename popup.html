@@ -13,6 +13,14 @@
         </header>
 
         <main class="controls">
+            <!-- モード切替: ドメイン / このページ -->
+            <div class="control-group mode-selector">
+                <input type="radio" id="mode-domain" name="mode" value="domain" checked>
+                <label for="mode-domain">ドメイン全体</label>
+                <input type="radio" id="mode-page" name="mode" value="page">
+                <label for="mode-page">このページのみ</label>
+            </div>
+
             <!-- サイト別設定 -->
             <div class="control-group site-settings">
                 <div class="slider-container">
@@ -22,7 +30,7 @@
                 </div>
                 <div class="button-group">
                     <button id="mute-button" title="ミュート">🔇</button>
-                    <button id="reset-button" title="このサイトの設定をリセット">🔄</button>
+                    <button id="reset-button" title="この設定をリセット">🔄</button>
                 </div>
             </div>
 
@@ -38,7 +46,6 @@
                     </label>
                 </div>
 
-                <!-- ▼▼▼ ここから追加 ▼▼▼ -->
                 <div class="setting-row">
                     <label class="toggle-label">最大音量</label>
                     <div class="segmented-control" id="max-volume-selector">
@@ -50,7 +57,6 @@
                         <label for="max600">600%</label>
                     </div>
                 </div>
-                <!-- ▲▲▲ ここまで追加 ▲▲▲ -->
 
                 <div class="setting-row">
                     <label for="default-enabled-toggle" class="toggle-label">デフォルト音量を設定</label>
@@ -68,7 +74,10 @@
         </main>
 
         <footer class="footer">
-            <p>Ver 1.1.0</p>
+            <div id="settings-button" class="settings-link disabled" title="設定ページは準備中です">
+                <span>⚙️</span>
+            </div>
+            <p>Ver 1.2.0</p>
         </footer>
     </div>
     <script src="popup.js"></script>
