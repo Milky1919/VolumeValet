@@ -12,9 +12,7 @@ const defaultVolumeControl = document.getElementById('default-volume-control');
 const defaultVolumeSlider = document.getElementById('default-volume-slider');
 const defaultVolumeLabel = document.getElementById('default-volume-label');
 const volumeIcon = document.getElementById('volume-icon');
-// ▼▼▼ ここから追加 ▼▼▼
 const maxVolumeSelector = document.getElementById('max-volume-selector');
-// ▲▲▲ ここまで追加 ▲▲▲
 
 
 let currentDomain = '';
@@ -39,7 +37,6 @@ async function getCurrentDomain() {
  * @param {object} settings - 設定オブジェクト
  */
 function updateUI(settings) {
-  // ▼▼▼ ここから変更 ▼▼▼
   const maxVolume = settings.maxVolume || 150;
   
   // 最大音量セレクターのUIを更新
@@ -59,7 +56,6 @@ function updateUI(settings) {
   if(defaultVolume > maxVolume) defaultVolume = maxVolume; // 最大値を超えないように調整
   defaultVolumeSlider.value = defaultVolume;
   defaultVolumeLabel.textContent = `${defaultVolume}%`;
-  // ▲▲▲ ここまで変更 ▲▲▲
   
   if (defaultEnabledToggle.checked) {
     defaultVolumeControl.classList.remove('disabled');
@@ -92,14 +88,12 @@ function updateUI(settings) {
       currentVolume = settings.isDefaultEnabled ? defaultVolume : 100;
   }
 
-  // ▼▼▼ ここから変更 ▼▼▼
   if(currentVolume > maxVolume) currentVolume = maxVolume; // 最大値を超えないように調整
   
   volumeSlider.value = currentVolume;
   volumeLabel.textContent = `${currentVolume}%`;
   lastVolume = currentVolume > 0 ? currentVolume : 100;
   updateVolumeIcon(currentVolume);
-  // ▲▲▲ ここまで変更 ▲▲▲
 }
 
 /**
@@ -108,9 +102,7 @@ function updateUI(settings) {
  */
 function loadAllSettings() {
   return new Promise((resolve) => {
-    // ▼▼▼ ここから変更 ▼▼▼
     chrome.storage.local.get(['siteVolumes', 'disabledSites', 'isDefaultEnabled', 'defaultVolume', 'maxVolume'], resolve);
-    // ▲▲▲ ここまで変更 ▲▲▲
   });
 }
 
@@ -139,8 +131,6 @@ async function sendMessageToContentScript(type, value) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.id) {
         chrome.tabs.sendMessage(tab.id, { type, value }, (response) => {
-            // メッセージの受信側が存在しない場合のエラーをハンドルする
-            // 開発中のリロード時や、content scriptを注入できないページで発生するが、動作上の問題はない
             if (chrome.runtime.lastError) {
                 console.log("Message sending failed, likely content script not ready:", chrome.runtime.lastError.message);
             }
@@ -182,7 +172,6 @@ muteButton.addEventListener('click', () => {
     const currentVolume = parseInt(volumeSlider.value, 10);
     const newVolume = currentVolume > 0 ? 0 : lastVolume;
     volumeSlider.value = newVolume;
-    // inputとchangeイベントを発火させて、UI更新と保存処理を動かす
     volumeSlider.dispatchEvent(new Event('input'));
     volumeSlider.dispatchEvent(new Event('change'));
 });
@@ -194,10 +183,9 @@ resetButton.addEventListener('click', async () => {
     const siteVolumes = settings.siteVolumes || {};
     delete siteVolumes[currentDomain];
     chrome.storage.local.set({ siteVolumes }, async () => {
-        // UIをリロードしてデフォルト値などを再適用
         const newSettings = await loadAllSettings();
         updateUI(newSettings);
-        // content scriptにも更新を通知
+        
         const maxVolume = newSettings.maxVolume || 150;
         let volumeToApply = newSettings.isDefaultEnabled ? (newSettings.defaultVolume || 75) : 100;
         if (volumeToApply > maxVolume) volumeToApply = maxVolume;
@@ -224,23 +212,26 @@ siteEnabledToggle.addEventListener('click', async () => {
         const newSettings = await loadAllSettings();
         updateUI(newSettings);
         sendMessageToContentScript('updateStatus', { isDisabled: !isEnabled });
+        
+        // ▼▼▼ UX改善のための修正 ▼▼▼
+        // 無効化した場合、音量を強制的に100%にリセットするメッセージを追加で送る
+        if (!isEnabled) {
+            sendMessageToContentScript('setVolume', 100);
+        }
+        // ▲▲▲ UX改善のための修正 ▲▲▲
     });
 });
 
-// ▼▼▼ ここから追加 ▼▼▼
 // 最大音量セレクター
 maxVolumeSelector.addEventListener('change', async (event) => {
     const newMaxVolume = parseInt(event.target.value, 10);
     chrome.storage.local.set({ maxVolume: newMaxVolume }, async () => {
-        // UIを再読み込みして、スライダーの最大値や現在の音量値を調整
         const settings = await loadAllSettings();
         updateUI(settings);
         
-        // 現在の音量を新しい最大値に合わせてcontent scriptに通知
         const currentVolume = parseInt(volumeSlider.value, 10);
         sendMessageToContentScript('setVolume', currentVolume);
 
-        // もしサイト別音量が設定されていた場合、それも新しい最大値に合わせて更新・保存
         if (currentDomain) {
             const siteVolumes = settings.siteVolumes || {};
             if (siteVolumes[currentDomain] && siteVolumes[currentDomain] > newMaxVolume) {
@@ -250,7 +241,6 @@ maxVolumeSelector.addEventListener('change', async (event) => {
         }
     });
 });
-// ▲▲▲ ここまで追加 ▲▲▲
 
 // デフォルト音量有効化トグル
 defaultEnabledToggle.addEventListener('click', () => {
@@ -268,5 +258,4 @@ defaultVolumeSlider.addEventListener('change', () => {
     const volume = parseInt(defaultVolumeSlider.value, 10);
     chrome.storage.local.set({ defaultVolume: volume });
 });
-
 
