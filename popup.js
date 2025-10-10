@@ -1,240 +1,247 @@
-// popup.js v1.2.2 (最終修正版)
+// popup.js v1.2.8 (リアルタイムスライダー修正版)
 
-// --- DOM要素の取得 ---
-const domainDisplay = document.getElementById('domain-display');
-const volumeSlider = document.getElementById('volume-slider');
-const volumeLabel = document.getElementById('volume-label');
-const muteButton = document.getElementById('mute-button');
-const resetButton = document.getElementById('reset-button');
-const siteEnabledToggle = document.getElementById('site-enabled-toggle');
-const defaultEnabledToggle = document.getElementById('default-enabled-toggle');
-const defaultVolumeControl = document.getElementById('default-volume-control');
-const defaultVolumeSlider = document.getElementById('default-volume-slider');
-const defaultVolumeLabel = document.getElementById('default-volume-label');
-const volumeIcon = document.getElementById('volume-icon');
-const maxVolumeSelector = document.getElementById('max-volume-selector');
-const modeDomainRadio = document.getElementById('mode-domain');
-const modePageRadio = document.getElementById('mode-page');
-const modeSelector = document.querySelector('.mode-selector');
-const settingsButton = document.getElementById('settings-button');
+class PopupApp {
+    constructor() {
+        this.nodes = {
+            masterEnableToggle: document.getElementById('master-enable-toggle'),
+            modeDisplayHeader: document.getElementById('mode-display-header'),
+            modeSelector: document.getElementById('mode-selector'),
+            modeDomainRadio: document.getElementById('mode-domain'),
+            volumeIcon: document.getElementById('volume-icon'),
+            volumeSlider: document.getElementById('volume-slider'),
+            volumeLabel: document.getElementById('volume-label'),
+            maxVolumeInput: document.getElementById('max-volume-input'),
+            muteButton: document.getElementById('mute-button'),
+            resetButton: document.getElementById('reset-button'),
+        };
 
-// --- グローバル変数 ---
-let state = {
-    domain: null,
-    pageUrl: null,
-    lastVolume: 100,
-    settings: {},
-    mode: 'domain' // 'domain' or 'page'
-};
+        this.state = {
+            domain: null,
+            pageUrl: null,
+            lastVolume: 100,
+            settings: {},
+            mode: 'domain'
+        };
+        
+        // スライダーの頻繁な書き込みを制御するためのタイマー
+        this.sliderSaveTimeout = null;
 
-// --- 関数定義 ---
+        this.initialize();
+    }
 
-/**
- * URLから不要なパラメータを除去して正規化する
- */
-function normalizeUrl(urlString) {
-    try {
-        const url = new URL(urlString);
-        const paramsToRemove = ['t', 'si', 'feature'];
-        url.searchParams.forEach((value, key) => {
-            if (key.startsWith('utm_') || paramsToRemove.includes(key)) {
-                url.searchParams.delete(key);
+    async initialize() {
+        await this.loadCurrentTabInfo();
+        await this.loadAllSettings();
+        this.determineInitialMode();
+        this.updateUI();
+        this.addEventListeners();
+    }
+    
+    async loadCurrentTabInfo() {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab?.url?.startsWith("http")) {
+            const url = new URL(tab.url);
+            this.state.domain = url.hostname;
+            this.state.pageUrl = this.normalizeUrl(tab.url);
+        }
+    }
+
+    normalizeUrl(urlString) {
+        try {
+            const url = new URL(urlString);
+            const paramsToRemove = ['t', 'si', 'feature'];
+            url.searchParams.forEach((value, key) => {
+                if (key.startsWith('utm_') || paramsToRemove.includes(key)) {
+                    url.searchParams.delete(key);
+                }
+            });
+            return url.origin + url.pathname + url.search;
+        } catch (e) { return urlString; }
+    }
+
+    async loadAllSettings() {
+        const defaults = { siteVolumes: {}, disabledSites: [], maxVolume: 200, lastActiveModes: {} };
+        this.state.settings = await chrome.storage.local.get(defaults);
+    }
+
+    determineInitialMode() {
+        const lastMode = this.state.settings.lastActiveModes?.[this.state.domain];
+        if (lastMode) {
+            this.state.mode = lastMode;
+        } else {
+            this.state.mode = (this.state.pageUrl && this.state.settings.siteVolumes?.[this.state.pageUrl] !== undefined) ? 'page' : 'domain';
+        }
+        document.getElementById(`mode-${this.state.mode}`).checked = true;
+    }
+
+    updateUI() {
+        const { settings, domain, pageUrl, mode } = this.state;
+
+        if (!domain) {
+            document.body.classList.add('disabled-page');
+            this.nodes.masterEnableToggle.disabled = true;
+            this.nodes.modeDisplayHeader.textContent = "設定対象外";
+            document.querySelector('.controls').style.display = 'none';
+            return;
+        }
+        
+        const isSiteDisabled = settings.disabledSites?.includes(domain) || false;
+        this.nodes.masterEnableToggle.checked = !isSiteDisabled;
+        document.body.classList.toggle('disabled-page', isSiteDisabled);
+        
+        const maxVolume = settings.maxVolume || 200;
+        this.nodes.maxVolumeInput.value = maxVolume;
+        this.nodes.volumeSlider.max = maxVolume;
+
+        const siteVolumes = settings.siteVolumes || {};
+        
+        this.nodes.modeDisplayHeader.textContent = isSiteDisabled 
+            ? `${domain} (無効)` 
+            : (mode === 'page' ? "このページのみ" : domain);
+        
+        let currentVolume = (mode === 'page')
+            ? (siteVolumes[pageUrl] ?? siteVolumes[domain] ?? 100)
+            : (siteVolumes[domain] ?? 100);
+
+        if (currentVolume > maxVolume) currentVolume = maxVolume;
+
+        this.nodes.volumeSlider.value = currentVolume;
+        this.nodes.volumeLabel.textContent = `${currentVolume}%`;
+        this.state.lastVolume = currentVolume > 0 ? currentVolume : 100;
+        this.updateVolumeIcon(currentVolume);
+    }
+
+    updateVolumeIcon(volume) {
+        if (volume > 100) this.nodes.volumeIcon.textContent = '🔥';
+        else if (volume > 50) this.nodes.volumeIcon.textContent = '🔊';
+        else if (volume > 0) this.nodes.volumeIcon.textContent = '🔉';
+        else this.nodes.volumeIcon.textContent = '🔇';
+    }
+
+    addEventListeners() {
+        this.nodes.masterEnableToggle.addEventListener('click', this.handleMasterToggle.bind(this));
+        this.nodes.modeSelector.addEventListener('change', this.handleModeChange.bind(this));
+        // ▼▼▼ ここからが変更点 ▼▼▼
+        this.nodes.volumeSlider.addEventListener('input', this.handleSliderInput.bind(this));
+        // 'change' イベントリスナーは不要になったため削除
+        // ▲▲▲ ここまでが変更点 ▲▲▲
+        this.nodes.muteButton.addEventListener('click', this.handleMute.bind(this));
+        this.nodes.resetButton.addEventListener('click', this.handleReset.bind(this));
+        this.nodes.maxVolumeInput.addEventListener('change', this.handleMaxVolumeChange.bind(this));
+    }
+
+    async handleMasterToggle() {
+        if (!this.state.domain) return;
+        const isEnabled = this.nodes.masterEnableToggle.checked;
+        const { disabledSites = [], lastActiveModes = {} } = this.state.settings;
+
+        if (!isEnabled) {
+            lastActiveModes[this.state.domain] = this.state.mode;
+        }
+
+        const newDisabledSites = isEnabled
+            ? disabledSites.filter(d => d !== this.state.domain)
+            : [...disabledSites, this.state.domain];
+        
+        await chrome.storage.local.set({ disabledSites: newDisabledSites, lastActiveModes });
+        await this.loadAllSettings();
+        this.updateUI();
+    }
+
+    async handleModeChange(e) {
+        this.state.mode = e.target.value;
+        
+        if(this.state.domain) {
+            const { lastActiveModes = {} } = this.state.settings;
+            lastActiveModes[this.state.domain] = this.state.mode;
+            await chrome.storage.local.set({ lastActiveModes });
+            this.state.settings.lastActiveModes = lastActiveModes;
+        }
+        this.updateUI();
+    }
+
+    // ▼▼▼ ここからが変更点 ▼▼▼
+    /**
+     * スライダーが動いている最中の処理 (リアルタイム反映)
+     */
+    handleSliderInput() {
+        const volume = parseInt(this.nodes.volumeSlider.value);
+        
+        // 1. UIの表示を即時更新
+        this.nodes.volumeLabel.textContent = `${volume}%`;
+        this.updateVolumeIcon(volume);
+        this.state.lastVolume = volume > 0 ? volume : this.state.lastVolume;
+
+        // 2. ストレージへの書き込みをスロットリング（負荷軽減）
+        // 前回のタイマーが設定されていればクリア
+        if (this.sliderSaveTimeout) {
+            clearTimeout(this.sliderSaveTimeout);
+        }
+        // 50ms後に保存処理を実行するタイマーを設定
+        this.sliderSaveTimeout = setTimeout(() => {
+            this.saveSliderValue(volume);
+        }, 50);
+    }
+    
+    /**
+     * スライダーの値をストレージに保存する
+     * @param {number} volume 保存する音量
+     */
+    async saveSliderValue(volume) {
+        const key = this.state.mode === 'page' ? this.state.pageUrl : this.state.domain;
+        if (!key) return;
+        
+        // 最新の設定を読み込んでから更新する
+        const currentSettings = await chrome.storage.local.get('siteVolumes');
+        const siteVolumes = currentSettings.siteVolumes || {};
+        siteVolumes[key] = volume;
+        await chrome.storage.local.set({ siteVolumes });
+    }
+    // ▲▲▲ ここまでが変更点 ▲▲▲
+
+    handleMute() {
+        const currentVolume = parseInt(this.nodes.volumeSlider.value);
+        const newVolume = currentVolume > 0 ? 0 : this.state.lastVolume;
+        this.nodes.volumeSlider.value = newVolume;
+        this.handleSliderInput(); // UI更新と保存処理を呼び出す
+        this.saveSliderValue(newVolume); // 即時保存
+    }
+
+    async handleReset() {
+        const key = this.state.mode === 'page' ? this.state.pageUrl : this.state.domain;
+        if (!key) return;
+        delete this.state.settings.siteVolumes[key];
+        if (this.state.mode === 'page') {
+            this.state.mode = 'domain';
+            this.nodes.modeDomainRadio.checked = true;
+        }
+        await chrome.storage.local.set({ siteVolumes: this.state.settings.siteVolumes });
+        await this.loadAllSettings();
+        this.updateUI();
+    }
+
+    async handleMaxVolumeChange(e) {
+        let newMaxVolume = parseInt(e.target.value, 10);
+        if (isNaN(newMaxVolume) || newMaxVolume < 100) newMaxVolume = 100;
+        else if (newMaxVolume > 1000) newMaxVolume = 1000;
+        e.target.value = newMaxVolume;
+
+        await chrome.storage.local.set({ maxVolume: newMaxVolume });
+        await this.loadAllSettings();
+        
+        const { siteVolumes = {} } = this.state.settings;
+        let changed = false;
+        Object.keys(siteVolumes).forEach(key => {
+            if (siteVolumes[key] > newMaxVolume) {
+                siteVolumes[key] = newMaxVolume;
+                changed = true;
             }
         });
-        return url.origin + url.pathname + url.search;
-    } catch (e) { return urlString; }
+        if (changed) await chrome.storage.local.set({ siteVolumes });
+
+        this.updateUI();
+    }
 }
 
-/**
- * UIの状態を更新する
- */
-function updateUI() {
-    const { settings, domain, pageUrl, mode } = state;
-
-    const maxVolume = settings.maxVolume || 150;
-    document.querySelector(`input[name="max_volume"][value="${maxVolume}"]`).checked = true;
-    volumeSlider.max = maxVolume;
-    defaultVolumeSlider.max = maxVolume;
-
-    defaultEnabledToggle.checked = settings.isDefaultEnabled || false;
-    let defaultVolume = settings.defaultVolume || 75;
-    if (defaultVolume > maxVolume) defaultVolume = maxVolume;
-    defaultVolumeSlider.value = defaultVolume;
-    defaultVolumeLabel.textContent = `${defaultVolume}%`;
-    defaultVolumeControl.classList.toggle('disabled', !defaultEnabledToggle.checked);
-
-    if (!domain) {
-        document.body.classList.add('disabled-page');
-        domainDisplay.textContent = "設定対象外のページ";
-        return;
-    }
-    
-    document.body.classList.remove('disabled-page');
-    const isSiteDisabled = settings.disabledSites?.includes(domain) || false;
-    siteEnabledToggle.checked = !isSiteDisabled;
-    document.querySelector('.site-settings').classList.toggle('disabled', isSiteDisabled);
-    modeSelector.classList.toggle('disabled', isSiteDisabled);
-    
-    if (isSiteDisabled) {
-        domainDisplay.textContent = domain;
-        return;
-    }
-
-    const siteVolumes = settings.siteVolumes || {};
-    const key = mode === 'page' ? pageUrl : domain;
-    domainDisplay.textContent = mode === 'page' ? "このページのみ" : domain;
-
-    let currentVolume = siteVolumes[key];
-    if (typeof currentVolume === 'undefined') {
-        currentVolume = settings.isDefaultEnabled ? defaultVolume : 100;
-    }
-    if (currentVolume > maxVolume) currentVolume = maxVolume;
-
-    volumeSlider.value = currentVolume;
-    volumeLabel.textContent = `${currentVolume}%`;
-    state.lastVolume = currentVolume > 0 ? currentVolume : 100;
-    updateVolumeIcon(currentVolume);
-}
-
-/**
- * ストレージから設定を読み込む
- */
-async function loadAllSettings() {
-    const defaults = { siteVolumes: {}, disabledSites: [], isDefaultEnabled: false, defaultVolume: 75, maxVolume: 150 };
-    state.settings = await chrome.storage.local.get(defaults);
-}
-
-/**
- * 音量アイコンを更新する
- */
-function updateVolumeIcon(volume) {
-    if (volume > 100) volumeIcon.textContent = '🔥';
-    else if (volume > 50) volumeIcon.textContent = '🔊';
-    else if (volume > 0) volumeIcon.textContent = '🔉';
-    else volumeIcon.textContent = '🔇';
-}
-
-/**
- * content.jsにメッセージを送信する
- */
-function sendMessage(type, value) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0] && tabs[0].id) {
-            chrome.tabs.sendMessage(tabs[0].id, { type, value }, () => {
-                if (chrome.runtime.lastError) { /* エラーは無視 */ }
-            });
-        }
-    });
-}
-
-// --- イベントリスナー ---
-
-document.addEventListener('DOMContentLoaded', async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.url && tab.url.startsWith("http")) {
-        const url = new URL(tab.url);
-        state.domain = url.hostname;
-        state.pageUrl = normalizeUrl(tab.url);
-    }
-
-    await loadAllSettings();
-
-    state.mode = (state.pageUrl && state.settings.siteVolumes?.[state.pageUrl] !== undefined) ? 'page' : 'domain';
-    document.getElementById(`mode-${state.mode}`).checked = true;
-
-    updateUI();
-});
-
-modeSelector.addEventListener('change', (e) => {
-    state.mode = e.target.value;
-    updateUI();
-});
-
-volumeSlider.addEventListener('input', () => {
-    const volume = parseInt(volumeSlider.value);
-    volumeLabel.textContent = `${volume}%`;
-    updateVolumeIcon(volume);
-    sendMessage('setVolume', volume);
-});
-
-volumeSlider.addEventListener('change', async () => {
-    const volume = parseInt(volumeSlider.value);
-    const key = state.mode === 'page' ? state.pageUrl : state.domain;
-    if (!key) return;
-    state.settings.siteVolumes[key] = volume;
-    await chrome.storage.local.set({ siteVolumes: state.settings.siteVolumes });
-    state.lastVolume = volume > 0 ? volume : state.lastVolume;
-});
-
-muteButton.addEventListener('click', () => {
-    const currentVolume = parseInt(volumeSlider.value);
-    const newVolume = currentVolume > 0 ? 0 : state.lastVolume;
-    volumeSlider.value = newVolume;
-    volumeSlider.dispatchEvent(new Event('input'));
-    volumeSlider.dispatchEvent(new Event('change'));
-});
-
-resetButton.addEventListener('click', async () => {
-    const key = state.mode === 'page' ? state.pageUrl : state.domain;
-    if (!key) return;
-    delete state.settings.siteVolumes[key];
-    if (state.mode === 'page') {
-        state.mode = 'domain';
-        modeDomainRadio.checked = true;
-    }
-    await chrome.storage.local.set({ siteVolumes: state.settings.siteVolumes });
-    await loadAllSettings();
-    updateUI();
-    sendMessage('setVolume', parseInt(volumeSlider.value));
-});
-
-siteEnabledToggle.addEventListener('click', async () => {
-    if (!state.domain) return;
-    const isEnabled = siteEnabledToggle.checked;
-    const { disabledSites = [] } = state.settings;
-    const newDisabledSites = isEnabled
-        ? disabledSites.filter(d => d !== state.domain)
-        : [...disabledSites, state.domain];
-    
-    await chrome.storage.local.set({ disabledSites: newDisabledSites });
-    await loadAllSettings();
-    updateUI();
-    sendMessage('updateStatus', { isDisabled: !isEnabled });
-});
-
-maxVolumeSelector.addEventListener('change', async (e) => {
-    const newMaxVolume = parseInt(e.target.value);
-    await chrome.storage.local.set({ maxVolume: newMaxVolume });
-    await loadAllSettings();
-    updateUI();
-    sendMessage('setVolume', parseInt(volumeSlider.value));
-
-    const { siteVolumes = {} } = state.settings;
-    let changed = false;
-    Object.keys(siteVolumes).forEach(key => {
-        if (siteVolumes[key] > newMaxVolume) {
-            siteVolumes[key] = newMaxVolume;
-            changed = true;
-        }
-    });
-    if (changed) await chrome.storage.local.set({ siteVolumes });
-});
-
-defaultEnabledToggle.addEventListener('click', async () => {
-    await chrome.storage.local.set({ isDefaultEnabled: defaultEnabledToggle.checked });
-    await loadAllSettings();
-    updateUI();
-});
-
-// ▼▼▼ UIバグ修正 ▼▼▼
-defaultVolumeSlider.addEventListener('input', () => {
-    const volume = parseInt(defaultVolumeSlider.value, 10);
-    defaultVolumeLabel.textContent = `${volume}%`;
-});
-// ▲▲▲ UIバグ修正 ▲▲▲
-
-defaultVolumeSlider.addEventListener('change', async () => {
-    const volume = parseInt(defaultVolumeSlider.value);
-    await chrome.storage.local.set({ defaultVolume: volume });
-});
+document.addEventListener('DOMContentLoaded', () => new PopupApp());
 
