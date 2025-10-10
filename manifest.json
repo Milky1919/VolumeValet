@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "VolumeValet",
+  "version": "1.0.0",
+  "description": "Webサイトごとに音量を記憶し、フルスクリーンを妨げないスマートな音量調整アシスタントです。",
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "VolumeValet",
+    "default_icon": {
+      "16": "images/icon16.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  }
+}
