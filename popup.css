@@ -1,186 +1,218 @@
 :root {
-  --bg-color: #f0f2f5;
-  --container-bg: #ffffff;
-  --primary-text: #2c3e50;
-  --secondary-text: #828282;
-  --accent-color: #3498db;
-  --accent-hover: #2980b9;
-  --border-color: #e0e0e0;
+  /* Light Mode Colors (Default) */
+  --bg-color: #ffffff;
+  --text-primary: #1a1a1a;
+  --text-secondary: #737373;
+  --accent-color: #007aff;
+  --accent-color-hover: #0056b3;
+  --border-color: #e5e5e5;
+  --icon-bg-hover: #f0f0f0;
+  --pinned-indicator: var(--accent-color);
+  --pin-icon-color: var(--text-secondary);
+  --pin-icon-active-color: var(--accent-color);
 }
+
+/*
+:root[data-theme="dark"] {
+  --bg-color: #1c1c1e;
+  --text-primary: #f2f2f7;
+  --text-secondary: #8d8d92;
+  --accent-color: #0a84ff;
+  --accent-color-hover: #389dff;
+  --border-color: #3a3a3c;
+  --icon-bg-hover: #2c2c2e;
+  --pinned-indicator: var(--accent-color);
+  --pin-icon-color: var(--text-secondary);
+  --pin-icon-active-color: var(--accent-color);
+}
+*/
 
 body {
   font-family: 'Segoe UI', 'Meiryo', sans-serif;
   margin: 0;
   background-color: var(--bg-color);
   width: 320px;
-  color: var(--primary-text);
-  -webkit-font-smoothing: antialiased;
+  color: var(--text-primary);
+  user-select: none;
+  transition: border-top 0.2s ease-in-out;
+}
+
+body.is-page-specific {
+  border-top: 3px solid var(--pinned-indicator);
 }
 
 .container {
-  padding: 12px;
-  background-color: var(--container-bg);
+  padding: 12px 16px;
 }
 
 .header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--border-color);
 }
 
-.mode-display-header {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex-grow: 1;
-    text-align: left;
-    padding-right: 10px;
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+.pin-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  margin-left: 8px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+.pin-button:hover {
+  background-color: var(--icon-bg-hover);
+}
+.pin-button svg {
+  stroke: var(--pin-icon-color);
+  fill: none;
+  transition: all 0.2s ease-in-out;
+}
+.pin-button.active svg {
+  fill: var(--pin-icon-active-color);
+  stroke: var(--pin-icon-active-color);
+}
+
 
 .controls {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  padding: 16px 0;
 }
 
-.control-group {
+.volume-control-area {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 12px;
 }
 
-.segmented-control {
-    display: flex;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    overflow: hidden;
-}
-.segmented-control input[type="radio"] { display: none; }
-.segmented-control label {
-    padding: 6px 10px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background-color 0.2s, color 0.2s;
-    text-align: center;
-    flex-grow: 1;
-    user-select: none;
-}
-.segmented-control label:not(:last-child) { border-right: 1px solid var(--border-color); }
-.segmented-control input[type="radio"]:checked + label {
-    background-color: var(--accent-color);
-    color: white;
+.volume-icon {
+  font-size: 22px;
 }
 
-.slider-container {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-#volume-icon { font-size: 20px; user-select: none; }
 .slider {
-  -webkit-appearance: none; width: 100%; height: 8px; border-radius: 5px;
-  background: var(--border-color); outline: none; opacity: 0.9;
-  transition: opacity .2s; cursor: pointer;
+  -webkit-appearance: none;
+  flex-grow: 1;
+  height: 8px;
+  border-radius: 5px;
+  background: var(--border-color);
+  outline: none;
+  cursor: pointer;
 }
-.slider:hover { opacity: 1; }
+
+/* ▼▼▼ ここからが変更点 ▼▼▼ */
+/* 通常（ドメイン設定）時のつまみのスタイル */
 .slider::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none; width: 20px; height: 20px;
-  border-radius: 50%; background: var(--accent-color); cursor: pointer;
-  transition: background .2s;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-color);
+  border: 2px solid var(--accent-color);
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
 }
-.slider::-webkit-slider-thumb:hover { background: var(--accent-hover); }
+
+/* 個別ページ設定時のつまみのスタイル */
+body.is-page-specific .slider::-webkit-slider-thumb {
+  background: var(--accent-color);
+  border: 2px solid var(--accent-color);
+}
+
+.slider::-webkit-slider-thumb:hover {
+   /* ホバー時のスタイルは共通で少し透明度を変えるなど */
+   opacity: 0.8;
+}
+/* ▲▲▲ ここまでが変更点 ▲▲▲ */
+
 
 .volume-value {
-  font-size: 14px; font-weight: 600; min-width: 45px;
-  text-align: right; color: var(--accent-color);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent-color);
+  min-width: 50px;
+  text-align: right;
 }
 
-.sub-controls {
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
+
+.actions-area {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
 }
-.max-volume-container {
+
+.action-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.action-button {
+    font-size: 18px;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s;
+    color: var(--text-secondary);
+}
+.action-button:hover {
+    background-color: var(--icon-bg-hover);
+}
+
+.max-volume-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.max-volume-input {
+    width: 50px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 12px;
+    text-align: right;
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+}
+.max-volume-input:focus {
+    outline: 1px solid var(--accent-color);
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-link {
+    cursor: not-allowed;
+    opacity: 0.6;
     display: flex;
     align-items: center;
     gap: 4px;
 }
-.sub-label {
-    font-size: 13px;
-    color: var(--secondary-text);
-    white-space: nowrap;
-}
-#max-volume-input {
-    width: 50px;
-    border: 1px solid var(--border-color);
-    border-radius: 5px;
-    padding: 4px 6px;
-    text-align: right;
-    font-size: 14px;
-    -moz-appearance: textfield; /* Firefox */
-}
-#max-volume-input::-webkit-outer-spin-button,
-#max-volume-input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-.percent-sign {
-    font-size: 13px;
-    color: var(--secondary-text);
-}
-
-.button-group { display: flex; gap: 8px; }
-.button-group button {
-  background: none; border: 1px solid var(--border-color); border-radius: 5px;
-  padding: 6px 10px; cursor: pointer; font-size: 16px;
-  transition: background-color .2s, border-color .2s;
-}
-.button-group button:hover { background-color: var(--bg-color); border-color: #ccc; }
-
-body.disabled-page .controls {
-    opacity: 0.5;
-    pointer-events: none;
-}
-
-.switch {
-  position: relative; display: inline-block; width: 44px; height: 24px;
-}
-.switch input { opacity: 0; width: 0; height: 0; }
-.switch-slider {
-  position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-  background-color: #ccc; transition: .4s; border-radius: 34px;
-}
-.switch-slider:before {
-  position: absolute; content: ""; height: 18px; width: 18px;
-  left: 3px; bottom: 3px; background-color: white;
-  transition: .4s; border-radius: 50%;
-}
-input:checked + .switch-slider { background-color: var(--accent-color); }
-input:focus + .switch-slider { box-shadow: 0 0 1px var(--accent-color); }
-input:checked + .switch-slider:before { transform: translateX(20px); }
-
-.footer {
-  display: flex; justify-content: space-between; align-items: center;
-  font-size: 11px; color: var(--secondary-text);
-  margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border-color);
-}
-.settings-link, .version-text {
-    flex-basis: 50px;
-    flex-shrink: 0;
-}
-.version-text { text-align: right; }
-.footer-title {
-    flex-grow: 1;
-    text-align: center;
-    font-weight: bold;
-    color: var(--primary-text);
-}
-.settings-link.disabled { cursor: not-allowed; opacity: 0.5; }
 
