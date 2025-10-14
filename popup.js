@@ -1,4 +1,4 @@
-// popup.js v1.2.12 (最終UX調整版)
+// popup.js v1.3.0 (Dynamic Icon Trigger)
 
 class PopupApp {
     constructor() {
@@ -111,31 +111,22 @@ class PopupApp {
     }
 
     addEventListeners() {
-        // ▼▼▼ ここからが変更点 ▼▼▼
         this.nodes.volumeSlider.addEventListener('input', this.handleSliderInput.bind(this));
         this.nodes.volumeSlider.addEventListener('change', this.handleSliderChange.bind(this));
-        // ▲▲▲ ここまでが変更点 ▲▲▲
         this.nodes.pinButton.addEventListener('click', this.handlePinClick.bind(this));
         this.nodes.muteButton.addEventListener('click', this.handleMute.bind(this));
         this.nodes.resetButton.addEventListener('click', this.handleReset.bind(this));
         this.nodes.maxVolumeInput.addEventListener('change', this.handleMaxVolumeChange.bind(this));
     }
     
-    /**
-     * スライダーを動かしている最中の処理（リアルタイム音量変更）
-     */
     handleSliderInput() {
         const volume = parseInt(this.nodes.volumeSlider.value);
         this.nodes.volumeLabel.textContent = `${volume}%`;
         this.updateVolumeIcon(volume);
         this.state.lastVolume = volume > 0 ? volume : this.state.lastVolume;
-        // content.jsにリアルタイムで音量変更を指示
         this.sendMessage('setVolume', volume);
     }
     
-    /**
-     * スライダーから指を離した時の処理（設定の保存）
-     */
     handleSliderChange() {
         const volume = parseInt(this.nodes.volumeSlider.value);
         this.saveSliderValue(volume);
@@ -166,12 +157,11 @@ class PopupApp {
         const currentVolume = parseInt(this.nodes.volumeSlider.value);
         const newVolume = currentVolume > 0 ? 0 : this.state.lastVolume;
         this.nodes.volumeSlider.value = newVolume;
-        this.handleSliderInput(); // リアルタイム反映
-        this.saveSliderValue(newVolume); // 設定を即時保存
+        this.handleSliderInput();
+        this.saveSliderValue(newVolume);
     }
     
     async handleReset() {
-        // 現在見ている設定の音量を100%にリセットする
         await this.saveSliderValue(100);
         this.updateUI();
         this.sendMessage('setVolume', 100);
@@ -213,5 +203,12 @@ class PopupApp {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => new PopupApp());
+document.addEventListener('DOMContentLoaded', () => {
+    // ▼▼▼ ここからが変更点 ▼▼▼
+    // ポップアップが開かれたときに、現在のタブのアイコンを更新するようバックグラウンドに通知
+    // これにより、ストレージの変更が即座にアイコンに反映される
+    chrome.runtime.sendMessage({ action: "refreshIcon" });
+    // ▲▲▲ ここまでが変更点 ▲▲▲
+    new PopupApp();
+});
 
