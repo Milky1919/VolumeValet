@@ -74,6 +74,7 @@ if (typeof window.volumeValet === 'undefined') {
             let volumeToApply = settings.siteVolumes?.[key] ?? 100;
             if (volumeToApply > maxVolume) volumeToApply = maxVolume;
             
+            await this.ensureAudioContext();
             this.setVolumeForAllNodes(volumeToApply);
         }
 
