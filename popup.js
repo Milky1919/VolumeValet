@@ -1,4 +1,4 @@
-// popup.js v1.3.0 (Dynamic Icon Trigger)
+// popup.js v1.4.0 (Stable)
 
 class PopupApp {
     constructor() {
@@ -19,7 +19,7 @@ class PopupApp {
             pageUrl: null,
             lastVolume: 100,
             settings: {},
-            activeSetting: 'domain' // 'domain' or 'page'
+            activeSetting: 'domain'
         };
         
         this.initialize();
@@ -135,8 +135,10 @@ class PopupApp {
     async saveSliderValue(volume) {
         const key = this.state.activeSetting === 'page' ? this.state.pageUrl : this.state.domain;
         if (!key) return;
-        this.state.settings.siteVolumes[key] = volume;
-        await chrome.storage.local.set({ siteVolumes: this.state.settings.siteVolumes });
+        const { siteVolumes } = await chrome.storage.local.get('siteVolumes');
+        siteVolumes[key] = volume;
+        await chrome.storage.local.set({ siteVolumes });
+        this.state.settings.siteVolumes = siteVolumes; // Update local state
     }
 
     async handlePinClick() {
@@ -145,8 +147,10 @@ class PopupApp {
             const currentDomainVolume = this.state.settings.siteVolumes[this.state.domain] ?? 100;
             await this.saveSliderValue(currentDomainVolume);
         } else {
-            delete this.state.settings.siteVolumes[this.state.pageUrl];
-            await chrome.storage.local.set({ siteVolumes: this.state.settings.siteVolumes });
+            const { siteVolumes } = await chrome.storage.local.get('siteVolumes');
+            delete siteVolumes[this.state.pageUrl];
+            await chrome.storage.local.set({ siteVolumes });
+            this.state.settings.siteVolumes = siteVolumes;
             this.state.activeSetting = 'domain';
         }
         this.updateUI();
@@ -158,11 +162,18 @@ class PopupApp {
         const newVolume = currentVolume > 0 ? 0 : this.state.lastVolume;
         this.nodes.volumeSlider.value = newVolume;
         this.handleSliderInput();
-        this.saveSliderValue(newVolume);
+        this.handleSliderChange(); // Immediately save mute state
     }
     
     async handleReset() {
-        await this.saveSliderValue(100);
+        const key = this.state.activeSetting === 'page' ? this.state.pageUrl : this.state.domain;
+        if (!key) return;
+        
+        const { siteVolumes } = await chrome.storage.local.get('siteVolumes');
+        siteVolumes[key] = 100;
+        await chrome.storage.local.set({ siteVolumes });
+        this.state.settings.siteVolumes = siteVolumes;
+
         this.updateUI();
         this.sendMessage('setVolume', 100);
     }
@@ -173,8 +184,8 @@ class PopupApp {
         else if (newMaxVolume > 1000) newMaxVolume = 1000;
         e.target.value = newMaxVolume;
 
-        this.state.settings.maxVolume = newMaxVolume;
         await chrome.storage.local.set({ maxVolume: newMaxVolume });
+        await this.loadAllSettings();
         
         const { siteVolumes = {} } = this.state.settings;
         let changed = false;
@@ -195,8 +206,8 @@ class PopupApp {
     sendMessage(type, value) {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (tabs[0]?.id) {
-                chrome.tabs.sendMessage(tabs[0].id, { type, value, allFrames: true }, () => {
-                    if (chrome.runtime.lastError) { /* content scriptがなければ無視 */ }
+                chrome.tabs.sendMessage(tabs[0].id, { type, value }, () => {
+                    if (chrome.runtime.lastError) { /* ignore */ }
                 });
             }
         });
@@ -204,11 +215,7 @@ class PopupApp {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    // ▼▼▼ ここからが変更点 ▼▼▼
-    // ポップアップが開かれたときに、現在のタブのアイコンを更新するようバックグラウンドに通知
-    // これにより、ストレージの変更が即座にアイコンに反映される
     chrome.runtime.sendMessage({ action: "refreshIcon" });
-    // ▲▲▲ ここまでが変更点 ▲▲▲
     new PopupApp();
 });
 

@@ -1,33 +1,25 @@
-// background.js v1.3.2 (Final Icon Logic Fix)
+// background.js v1.4.1 (SPA Navigation Fix)
 
-// --- Offscreen Canvas Setup ---
-let creating; // Offscreen document creation promise
+let creating;
 async function setupOffscreenDocument(path) {
     const offscreenUrl = chrome.runtime.getURL(path);
     const existingContexts = await chrome.runtime.getContexts({
         contextTypes: ['OFFSCREEN_DOCUMENT'],
         documentUrls: [offscreenUrl]
     });
-
-    if (existingContexts.length > 0) {
-        return;
-    }
-
+    if (existingContexts.length > 0) return;
     if (creating) {
         await creating;
     } else {
         creating = chrome.offscreen.createDocument({
             url: path,
-            reasons: ['CANVAS'],
+            reasons: ['DOM_PARSER'],
             justification: 'to dynamically generate extension icons',
         });
         await creating;
         creating = null;
     }
 }
-
-
-// --- Icon Update Logic ---
 
 async function updateIconForTab(tabId) {
     if (!tabId) return;
@@ -47,42 +39,28 @@ async function updateIconForTab(tabId) {
 
     const pageVolume = siteVolumes[pageUrl];
     const domainVolume = siteVolumes[domain];
-    
-    // --- ▼▼▼ ここからが変更点 ▼▼▼ ---
 
-    // 1. 状態を個別に判定する
     const isPinned = (pageVolume !== undefined);
     const isDomainSet = (domainVolume !== undefined);
     const isSet = isPinned || isDomainSet;
 
-    let currentVolume;
-    if (isPinned) {
-        currentVolume = pageVolume;
-    } else if (isDomainSet) {
-        currentVolume = domainVolume;
-    } else {
-        currentVolume = 100; // 未設定時のデフォルト
-    }
+    let currentVolume = isPinned ? pageVolume : (isDomainSet ? domainVolume : 100);
     const isMuted = (currentVolume === 0);
 
-    // 2. アイコン描画のための状態オブジェクトを作成
     const iconState = {
         isSet: isSet,
         isMuted: isMuted,
     };
     
-    // 3. バッジ表示のための状態を独立して決定
     const badgeText = isPinned ? 'PIN' : '';
-    const badgeColor = '#007AFF'; // Blue
+    const badgeColor = '#007AFF';
 
-    // 4. アイコンとバッジをそれぞれ更新する
     await drawIcon(iconState, tabId);
     
     chrome.action.setBadgeText({ text: badgeText, tabId: tabId });
     if (badgeText) {
         chrome.action.setBadgeBackgroundColor({ color: badgeColor, tabId: tabId });
     }
-    // --- ▲▲▲ ここまでが変更点 ▲▲▲ ---
 }
 
 async function drawIcon(state, tabId) {
@@ -93,7 +71,6 @@ async function drawIcon(state, tabId) {
             action: 'drawIcon',
             state: state
         });
-
         if (imageData) {
             chrome.action.setIcon({ imageData: imageData, tabId: tabId });
         }
@@ -102,9 +79,7 @@ async function drawIcon(state, tabId) {
     }
 }
 
-// --- Event Listeners ---
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message) => {
     if (message.action === "refreshIcon") {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (tabs[0]) {
@@ -119,22 +94,25 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete' && tab.url && tab.url.startsWith('http')) {
+    // --- ▼▼▼ ここからが変更点 ▼▼▼ ---
+    // SPAサイトでのページ遷移（URLの変更）を検知する
+    if (changeInfo.url) {
+        // content.jsに設定の再適用を指示
+        chrome.tabs.sendMessage(tabId, { type: 'URL_CHANGED' }).catch(() => {});
+        // アイコンも更新
         updateIconForTab(tabId);
     }
+    // --- ▲▲▲ ここまでが変更点 ▲▲▲
 });
 
-chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'local' && (changes.siteVolumes || changes.maxVolume)) {
-         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]) {
-                updateIconForTab(tabs[0].id);
-            }
-        });
-    }
+chrome.storage.onChanged.addListener(() => {
+     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+            updateIconForTab(tabs[0].id);
+        }
+    });
 });
 
-// --- Utility Function ---
 function normalizeUrl(urlString) {
     try {
         const url = new URL(urlString);

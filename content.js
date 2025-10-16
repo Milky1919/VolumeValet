@@ -1,4 +1,4 @@
-// content.js v1.2.7 (最終安定化・状態同期版)
+// content.js v1.4.1 (SPA Navigation Fix)
 
 if (typeof window.volumeValet === 'undefined') {
     class ContentScript {
@@ -7,33 +7,37 @@ if (typeof window.volumeValet === 'undefined') {
             this.gainNodes = new Map();
             this.observer = null;
             this.currentVolume = 1.0;
-            this.isDisabled = false;
+            this.isUserInteracted = false;
 
             this.initialize();
         }
 
         async initialize() {
-            this.setupStorageListener();
+            this.setupMessageListener();
             this.setupMutationObserver();
-            // ユーザー操作を待ってからAudioContextを初期化
-            this.waitForUserInteraction().then(() => this.ensureAudioContext());
+            await this.applySettings();
         }
 
-        /**
-         * chrome.storageの変更を監視するリスナーをセットアップ
-         */
-        setupStorageListener() {
-            chrome.storage.onChanged.addListener((changes, namespace) => {
-                if (namespace === 'local') {
-                    // 設定が変更されたら、音量を再評価して適用する
+        setupMessageListener() {
+            chrome.runtime.onMessage.addListener((message) => {
+                if (message.type === 'setVolume') {
+                    this.ensureAudioContext().then(() => {
+                        this.setVolumeForAllNodes(message.value);
+                    });
+                // --- ▼▼▼ ここからが変更点 ▼▼▼ ---
+                } else if (message.type === 'URL_CHANGED') {
+                    // background.jsからの指示で、設定を再適用する
                     this.applySettings();
                 }
+                // --- ▲▲▲ ここまでが変更点 ▲▲▲
             });
         }
         
         waitForUserInteraction() {
+            if (this.isUserInteracted) return Promise.resolve();
             return new Promise(resolve => {
                 const listener = () => {
+                    this.isUserInteracted = true;
                     ['click', 'keydown', 'mousedown', 'touchstart'].forEach(type => {
                         window.removeEventListener(type, listener, { capture: true });
                     });
@@ -47,9 +51,10 @@ if (typeof window.volumeValet === 'undefined') {
         
         async ensureAudioContext() {
             if (!this.audioContext) {
+                 await this.waitForUserInteraction();
                 try {
                     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                } catch (e) { console.error('VolumeValet: Web Audio API is not supported.', e); return; }
+                } catch (e) { console.error('VolumeValet: Web Audio API not supported.', e); return; }
             }
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
@@ -57,19 +62,9 @@ if (typeof window.volumeValet === 'undefined') {
             this.scanAndProcessAllMedia();
         }
 
-        /**
-         * 現在のストレージ設定に基づいて音量を適用する
-         */
         async applySettings() {
-            const settings = await chrome.storage.local.get(['siteVolumes', 'disabledSites', 'maxVolume']);
+            const settings = await chrome.storage.local.get(['siteVolumes', 'maxVolume']);
             const domain = window.location.hostname;
-
-            this.isDisabled = settings.disabledSites?.includes(domain) || false;
-            
-            if (this.isDisabled) {
-                this.setVolumeForAllNodes(100); // 無効なら100%に
-                return;
-            }
             
             const key = settings.siteVolumes?.[this.normalizeUrl(window.location.href)] !== undefined
                 ? this.normalizeUrl(window.location.href)
@@ -107,7 +102,7 @@ if (typeof window.volumeValet === 'undefined') {
             this.observer = new MutationObserver((mutations) => {
                 for (const mutation of mutations) {
                     for (const node of mutation.addedNodes) {
-                        if (node.nodeType === 1) {
+                        if (node.nodeType === 1) { // ELEMENT_NODE
                             if (node.matches('video, audio')) {
                                 this.ensureAudioContext().then(() => this.processMediaElement(node));
                             }
