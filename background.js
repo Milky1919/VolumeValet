@@ -1,4 +1,4 @@
-// background.js v1.3.1 (Bug Fix)
+// background.js v1.3.2 (Final Icon Logic Fix)
 
 // --- Offscreen Canvas Setup ---
 let creating; // Offscreen document creation promise
@@ -48,56 +48,62 @@ async function updateIconForTab(tabId) {
     const pageVolume = siteVolumes[pageUrl];
     const domainVolume = siteVolumes[domain];
     
-    let isSet = (pageVolume !== undefined || domainVolume !== undefined);
-    let isPinned = (pageVolume !== undefined);
-    
-    let currentVolume = isPinned ? pageVolume : domainVolume;
-    if (currentVolume === undefined) currentVolume = 100;
+    // --- ▼▼▼ ここからが変更点 ▼▼▼ ---
 
-    let isMuted = (currentVolume === 0);
+    // 1. 状態を個別に判定する
+    const isPinned = (pageVolume !== undefined);
+    const isDomainSet = (domainVolume !== undefined);
+    const isSet = isPinned || isDomainSet;
 
-    // --- Determine Icon State based on priority ---
-    let iconState = {
+    let currentVolume;
+    if (isPinned) {
+        currentVolume = pageVolume;
+    } else if (isDomainSet) {
+        currentVolume = domainVolume;
+    } else {
+        currentVolume = 100; // 未設定時のデフォルト
+    }
+    const isMuted = (currentVolume === 0);
+
+    // 2. アイコン描画のための状態オブジェクトを作成
+    const iconState = {
         isSet: isSet,
-        isMuted: false,
-        badgeText: ''
+        isMuted: isMuted,
     };
-
-    // 1. Muted State (Top Priority)
-    if (isMuted) {
-        iconState.isMuted = true;
-    }
-    // 2. Pinned State
-    else if (isPinned) {
-        iconState.badgeText = 'PIN';
-    }
     
-    await drawIcon(iconState, tabId);
+    // 3. バッジ表示のための状態を独立して決定
+    const badgeText = isPinned ? 'PIN' : '';
+    const badgeColor = '#007AFF'; // Blue
 
-    // Set Badge
-    chrome.action.setBadgeText({ text: iconState.badgeText, tabId: tabId });
-    if (isPinned && !isMuted) {
-         chrome.action.setBadgeBackgroundColor({ color: '#007AFF', tabId: tabId }); // Blue
+    // 4. アイコンとバッジをそれぞれ更新する
+    await drawIcon(iconState, tabId);
+    
+    chrome.action.setBadgeText({ text: badgeText, tabId: tabId });
+    if (badgeText) {
+        chrome.action.setBadgeBackgroundColor({ color: badgeColor, tabId: tabId });
     }
+    // --- ▲▲▲ ここまでが変更点 ▲▲▲ ---
 }
 
 async function drawIcon(state, tabId) {
     await setupOffscreenDocument('offscreen.html');
-    const imageData = await chrome.runtime.sendMessage({
-        target: 'offscreen',
-        action: 'drawIcon',
-        state: state
-    });
+    try {
+        const imageData = await chrome.runtime.sendMessage({
+            target: 'offscreen',
+            action: 'drawIcon',
+            state: state
+        });
 
-    if (imageData) {
-        chrome.action.setIcon({ imageData: imageData, tabId: tabId });
+        if (imageData) {
+            chrome.action.setIcon({ imageData: imageData, tabId: tabId });
+        }
+    } catch (error) {
+        console.warn("Could not draw icon, offscreen document might be closing.", error);
     }
 }
 
 // --- Event Listeners ---
 
-// ▼▼▼ ここからが変更点 ▼▼▼
-// When popup opens and requests an icon refresh
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "refreshIcon") {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -107,7 +113,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
     }
 });
-// ▲▲▲ ここまでが変更点 ▲▲▲
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
     updateIconForTab(activeInfo.tabId);
