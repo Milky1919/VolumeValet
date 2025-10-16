@@ -23,6 +23,7 @@ async function setupOffscreenDocument(path) {
 
 async function updateIconForTab(tabId) {
     if (!tabId) return;
+
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab || !tab.url || !tab.url.startsWith('http')) {
         chrome.action.setIcon({ path: "images/icon48.png", tabId: tabId });
@@ -34,33 +35,22 @@ async function updateIconForTab(tabId) {
     const domain = url.hostname;
     const pageUrl = normalizeUrl(tab.url);
 
-    const settings = await chrome.storage.local.get(['siteVolumes']);
-    const siteVolumes = settings.siteVolumes || {};
+    const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
 
     const pageVolume = siteVolumes[pageUrl];
     const domainVolume = siteVolumes[domain];
 
-    const isPinned = (pageVolume !== undefined);
-    const isDomainSet = (domainVolume !== undefined);
-    const isSet = isPinned || isDomainSet;
-
-    let currentVolume = isPinned ? pageVolume : (isDomainSet ? domainVolume : 100);
-    const isMuted = (currentVolume === 0);
-
-    const iconState = {
-        isSet: isSet,
-        isMuted: isMuted,
-    };
-    
-    const badgeText = isPinned ? 'PIN' : '';
-    const badgeColor = '#007AFF';
-
-    await drawIcon(iconState, tabId);
-    
-    chrome.action.setBadgeText({ text: badgeText, tabId: tabId });
-    if (badgeText) {
-        chrome.action.setBadgeBackgroundColor({ color: badgeColor, tabId: tabId });
+    let iconState;
+    if (pageVolume !== undefined) {
+        iconState = pageVolume === 0 ? 'pageMute' : 'pageSet';
+    } else if (domainVolume !== undefined) {
+        iconState = domainVolume === 0 ? 'domainMute' : 'domainSet';
+    } else {
+        iconState = 'unset';
     }
+    
+    await drawIcon(iconState, tabId);
+    chrome.action.setBadgeText({ text: '', tabId: tabId });
 }
 
 async function drawIcon(state, tabId) {

@@ -30,44 +30,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 function drawIcon(state) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Step 1: Draw the base icon (Color or Grayscale)
-    if (state.isSet) {
-        // Draw color icon
-        ctx.filter = 'none';
-        ctx.drawImage(baseIcon, 0, 0, canvas.width, canvas.height);
-    } else {
-        // Draw grayscale icon
+    const isUnset = (state === 'unset');
+    const isMuted = (state === 'pageMute' || state === 'domainMute');
+    const isPinned = (state === 'pageMute' || state === 'pageSet');
+
+    // 1. ベースアイコンを描画（未設定の場合はグレースケール）
+    if (isUnset) {
         ctx.filter = 'grayscale(100%) opacity(60%)';
         ctx.drawImage(baseIcon, 0, 0, canvas.width, canvas.height);
-        ctx.filter = 'none'; // Reset filter
+        ctx.filter = 'none';
+    } else {
+        ctx.drawImage(baseIcon, 0, 0, canvas.width, canvas.height);
     }
 
-    // Step 2: Draw the mute overlay if needed
-    if (state.isMuted) {
+    // 2. ミュートオーバーレイを描画
+    if (isMuted) {
         drawMuteOverlay();
+    }
+
+    // 3. PINバッジを描画
+    if (isPinned) {
+        drawPinBadge();
     }
     
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
 }
-
 
 function drawMuteOverlay() {
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
     const radius = canvas.width / 2.8;
 
-    // Draw red circle background
-    ctx.fillStyle = 'rgba(231, 76, 60, 0.9)'; // Red color
+    ctx.fillStyle = 'rgba(231, 76, 60, 0.9)';
     ctx.beginPath();
     ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
     ctx.fill();
 
-    // Draw slash
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(centerX - radius / 1.8, centerY + radius / 1.8);
     ctx.lineTo(centerX + radius / 1.8, centerY - radius / 1.8);
+    ctx.stroke();
+}
+
+function drawPinBadge() {
+    const badgeRadius = canvas.width / 5;
+    const badgeCenterX = canvas.width - badgeRadius - 2;
+    const badgeCenterY = badgeRadius + 2;
+
+    // Circle background
+    ctx.fillStyle = '#007AFF'; // Blue color for the badge
+    ctx.beginPath();
+    ctx.arc(badgeCenterX, badgeCenterY, badgeRadius, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Pin shape (simplified)
+    const pinHeadRadius = badgeRadius / 3.5;
+    const pinBodyLength = badgeRadius * 0.9;
+    const pinTipY = badgeCenterY + pinHeadRadius + pinBodyLength;
+
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+
+    // Pin head (circle)
+    ctx.beginPath();
+    ctx.arc(badgeCenterX, badgeCenterY - pinHeadRadius / 2, pinHeadRadius, 0, 2 * Math.PI);
+    ctx.fillStyle = 'white';
+    ctx.fill();
+
+    // Pin body (line)
+    ctx.beginPath();
+    ctx.moveTo(badgeCenterX, badgeCenterY);
+    ctx.lineTo(badgeCenterX, pinTipY);
     ctx.stroke();
 }
