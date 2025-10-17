@@ -132,16 +132,19 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
     // Check if the change is for a specific page URL or a domain
     if (changedKey.includes('/')) {
-        // Change is for a specific URL, sync only tabs with the exact same URL
+        // Change is for a specific URL.
+        // Query all tabs, normalize their URLs, and sync the ones that match.
         const targetUrl = changedKey;
-        chrome.tabs.query({ url: targetUrl }, (tabs) => {
+        chrome.tabs.query({}, (tabs) => {
             for (const tab of tabs) {
-                chrome.tabs.sendMessage(tab.id, {
-                    type: 'SYNC_VOLUME',
-                    volume: newVolume
-                }).catch(() => {
-                    // console.log(`Could not send message to tab ${tab.id}`);
-                });
+                if (tab.url && normalizeUrl(tab.url) === targetUrl) {
+                    chrome.tabs.sendMessage(tab.id, {
+                        type: 'SYNC_VOLUME',
+                        volume: newVolume
+                    }).catch(() => {
+                        // console.log(`Could not send message to tab ${tab.id}`);
+                    });
+                }
             }
         });
     } else {
