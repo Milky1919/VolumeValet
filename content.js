@@ -1,4 +1,4 @@
-// content.js v1.4.1 (SPA Navigation Fix)
+// content.js v1.4.2 (Critical Bug Fix)
 
 if (typeof window.volumeValet === 'undefined') {
     class ContentScript {
@@ -21,15 +21,14 @@ if (typeof window.volumeValet === 'undefined') {
         setupMessageListener() {
             chrome.runtime.onMessage.addListener((message) => {
                 if (message.type === 'setVolume') {
+                    // AudioContextがなくてもボリューム値だけは先に更新しておく
+                    this.currentVolume = message.value / 100;
                     this.ensureAudioContext().then(() => {
                         this.setVolumeForAllNodes(message.value);
                     });
-                // --- ▼▼▼ ここからが変更点 ▼▼▼ ---
                 } else if (message.type === 'URL_CHANGED') {
-                    // background.jsからの指示で、設定を再適用する
                     this.applySettings();
                 }
-                // --- ▲▲▲ ここまでが変更点 ▲▲▲
             });
         }
         
@@ -59,6 +58,7 @@ if (typeof window.volumeValet === 'undefined') {
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
             }
+            // 新しいメディア要素をスキャンして処理する
             this.scanAndProcessAllMedia();
         }
 
@@ -74,8 +74,13 @@ if (typeof window.volumeValet === 'undefined') {
             let volumeToApply = settings.siteVolumes?.[key] ?? 100;
             if (volumeToApply > maxVolume) volumeToApply = maxVolume;
             
+            // --- ▼▼▼ ここが最重要修正点 ▼▼▼ ---
+            // 1. まず先にボリューム値をプロパティに設定する
+            this.currentVolume = volumeToApply / 100;
+            // 2. その後でAudioContextを準備し、全ノードにボリュームを適用する
             await this.ensureAudioContext();
             this.setVolumeForAllNodes(volumeToApply);
+            // --- ▲▲▲ ここまでが最重要修正点 ▲▲▲
         }
 
         processMediaElement(element) {
@@ -84,6 +89,7 @@ if (typeof window.volumeValet === 'undefined') {
             try {
                 const source = this.audioContext.createMediaElementSource(element);
                 const gainNode = this.audioContext.createGain();
+                // 必ず最新のthis.currentVolumeが使われるようにする
                 gainNode.gain.value = this.currentVolume;
                 source.connect(gainNode).connect(this.audioContext.destination);
                 this.gainNodes.set(element, gainNode);
@@ -122,6 +128,7 @@ if (typeof window.volumeValet === 'undefined') {
             if (this.audioContext) {
                 this.gainNodes.forEach((gainNode) => {
                     if (gainNode?.gain) {
+                       // gain.valueの直接設定から、よりスムーズなsetTargetAtTimeに変更
                        gainNode.gain.setTargetAtTime(this.currentVolume, this.audioContext.currentTime, 0.015);
                     }
                 });
@@ -143,4 +150,3 @@ if (typeof window.volumeValet === 'undefined') {
     }
     window.volumeValet = new ContentScript();
 }
-
