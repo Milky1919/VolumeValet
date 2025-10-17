@@ -96,13 +96,21 @@ if (typeof window.volumeValet === 'undefined') {
     // Initial scan for media elements already present on the page
     document.querySelectorAll('video, audio').forEach(handleNewMediaElement);
 
-    // 5. Message Listener: Handle commands from the background script
+    // 5. Message Listener: Handle commands from the background script or popup
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.type === 'URL_CHANGED' || message.type === 'SYNC_VOLUME') {
-            // Re-apply settings for all currently tracked media elements
+            // Re-apply saved settings for all currently tracked media elements
             document.querySelectorAll('video, audio').forEach(element => {
-                if(mediaMap.has(element)) {
+                if (mediaMap.has(element)) {
                    applySettings(element);
+                }
+            });
+        } else if (message.type === 'setVolume') {
+            // Apply a temporary volume from the popup slider in real-time
+            const newVolume = message.value / 100;
+            document.querySelectorAll('video, audio').forEach(element => {
+                if (mediaMap.has(element)) {
+                    setVolume(element, newVolume);
                 }
             });
         }
