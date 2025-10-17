@@ -95,10 +95,69 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     // --- ▲▲▲ ここまでが変更点 ▲▲▲
 });
 
-chrome.storage.onChanged.addListener(() => {
-     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]) {
+chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace !== 'local' || !changes.siteVolumes) return;
+
+    const oldVolumes = changes.siteVolumes.oldValue || {};
+    const newVolumes = changes.siteVolumes.newValue || {};
+
+    // アイコンの更新は常に実行
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs[0]) {
             updateIconForTab(tabs[0].id);
+        }
+    });
+
+    // 変更されたキーを特定
+    let changedKey = null;
+    for (const key in newVolumes) {
+        if (newVolumes[key] !== oldVolumes[key]) {
+            changedKey = key;
+            break;
+        }
+    }
+    // 新規追加だけでなく、削除された場合も考慮
+    if (!changedKey) {
+        for (const key in oldVolumes) {
+            if (!(key in newVolumes)) {
+                changedKey = key;
+                break;
+            }
+        }
+    }
+
+    if (!changedKey) return;
+
+    // ページ単位の設定（URLキー）の場合は何もしない
+    // URLには必ず "/" が含まれるが、ドメイン名には含まれないことを利用
+    if (changedKey.includes('/')) {
+        return;
+    }
+
+    // ドメイン単位の設定が変更された場合、関連する全タブに通知
+    const changedDomain = changedKey;
+    const newVolume = newVolumes[changedDomain]; // 削除された場合はundefined
+
+    chrome.tabs.query({}, (tabs) => {
+        for (const tab of tabs) {
+            if (tab.url) {
+                try {
+                    const url = new URL(tab.url);
+                    if (url.hostname === changedDomain) {
+                        // 削除された場合(undefined)は、デフォルト音量(100)を送信するイメージだが、
+                        // content.js側でundefinedを受け取るとデフォルト値が適用されるので、
+                        // ここではそのまま送信する。
+                        chrome.tabs.sendMessage(tab.id, {
+                            type: 'SYNC_VOLUME',
+                            volume: newVolume
+                        }).catch(() => {
+                            // console.log(`Could not send message to tab ${tab.id}, it might be closed or restricted.`);
+                        });
+                    }
+                } catch (e) {
+                    // console.warn(`Invalid URL encountered in tab ${tab.id}: ${tab.url}`);
+                }
+            }
         }
     });
 });

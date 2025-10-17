@@ -28,6 +28,16 @@ if (typeof window.volumeValet === 'undefined' || !window.volumeValet.initialized
                     this.ensureAudioContext(); // 新規要素のためにスキャンをトリガー
                 } else if (message.type === 'URL_CHANGED') {
                     this.applySettings();
+                } else if (message.type === 'SYNC_VOLUME') {
+                    // ドメイン設定の同期メッセージを受信
+                    if (message.volume !== undefined) {
+                        // 値が指定されていれば、その音量を即時適用
+                        this.setVolumeForAllNodes(message.volume);
+                    } else {
+                        // 値がundefinedの場合（＝ドメイン設定が削除された場合）、
+                        // 設定を再評価して正しいフォールバックを適用する
+                        this.applySettings();
+                    }
                 }
                 return true; // 非同期応答を示す
             });
