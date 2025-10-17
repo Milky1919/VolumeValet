@@ -135,7 +135,8 @@ class PopupApp {
     async saveSliderValue(volume) {
         const key = this.state.activeSetting === 'page' ? this.state.pageUrl : this.state.domain;
         if (!key) return;
-        const { siteVolumes } = await chrome.storage.local.get('siteVolumes');
+        const data = await chrome.storage.local.get('siteVolumes');
+        const siteVolumes = data.siteVolumes || {};
         siteVolumes[key] = volume;
         await chrome.storage.local.set({ siteVolumes });
         this.state.settings.siteVolumes = siteVolumes; // Update local state
@@ -147,7 +148,8 @@ class PopupApp {
             const currentDomainVolume = this.state.settings.siteVolumes[this.state.domain] ?? 100;
             await this.saveSliderValue(currentDomainVolume);
         } else {
-            const { siteVolumes } = await chrome.storage.local.get('siteVolumes');
+            const data = await chrome.storage.local.get('siteVolumes');
+            const siteVolumes = data.siteVolumes || {};
             delete siteVolumes[this.state.pageUrl];
             await chrome.storage.local.set({ siteVolumes });
             this.state.settings.siteVolumes = siteVolumes;
@@ -169,7 +171,8 @@ class PopupApp {
         const key = this.state.activeSetting === 'page' ? this.state.pageUrl : this.state.domain;
         if (!key) return;
         
-        const { siteVolumes } = await chrome.storage.local.get('siteVolumes');
+        const data = await chrome.storage.local.get('siteVolumes');
+        const siteVolumes = data.siteVolumes || {};
         siteVolumes[key] = 100;
         await chrome.storage.local.set({ siteVolumes });
         this.state.settings.siteVolumes = siteVolumes;
