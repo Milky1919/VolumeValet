@@ -27,8 +27,7 @@ async function updateIconForTab(tabId) {
     try {
         const tab = await chrome.tabs.get(tabId);
         if (!tab || !tab.url || !tab.url.startsWith('http')) {
-            await chrome.action.setIcon({ path: "images/icon48.png", tabId: tabId });
-            await chrome.action.setBadgeText({ text: '', tabId: tabId });
+            await drawIcon('unset', tabId);
             return;
         }
 
@@ -51,7 +50,7 @@ async function updateIconForTab(tabId) {
     }
     
         await drawIcon(iconState, tabId);
-        await chrome.action.setBadgeText({ text: '', tabId: tabId });
+        chrome.action.setBadgeText({ text: '', tabId: tabId });
 
     } catch (error) {
         if (error.message.includes('No tab with id') || error.message.includes('Invalid tab ID')) {
@@ -73,7 +72,11 @@ async function drawIcon(state, tabId) {
         });
 
         if (rawImageData && rawImageData.data) {
-            const imageData = new ImageData(new Uint8ClampedArray(rawImageData.data), rawImageData.width, rawImageData.height);
+            const imageData = new ImageData(
+                new Uint8ClampedArray(rawImageData.data),
+                rawImageData.width,
+                rawImageData.height
+            );
             await chrome.action.setIcon({ imageData: imageData, tabId: tabId });
         }
     } catch (error) {
