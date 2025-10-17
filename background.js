@@ -84,15 +84,13 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    // --- ▼▼▼ ここからが変更点 ▼▼▼ ---
-    // SPAサイトでのページ遷移（URLの変更）を検知する
-    if (changeInfo.url) {
+    // SPAサイトでのURL変更時、またはタブの読み込みが完了した時
+    if (changeInfo.url || changeInfo.status === 'complete') {
         // content.jsに設定の再適用を指示
         chrome.tabs.sendMessage(tabId, { type: 'URL_CHANGED' }).catch(() => {});
         // アイコンも更新
         updateIconForTab(tabId);
     }
-    // --- ▲▲▲ ここまでが変更点 ▲▲▲
 });
 
 chrome.storage.onChanged.addListener((changes, namespace) => {
@@ -184,4 +182,3 @@ function normalizeUrl(urlString) {
         return url.origin + url.pathname + url.search;
     } catch (e) { return urlString; }
 }
-
