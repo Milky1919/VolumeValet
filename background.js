@@ -84,15 +84,13 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    // --- ▼▼▼ ここからが変更点 ▼▼▼ ---
-    // SPAサイトでのページ遷移（URLの変更）を検知する
-    if (changeInfo.url) {
+    // SPAサイトでのURL変更時、またはタブの読み込みが完了した時
+    if (changeInfo.url || changeInfo.status === 'complete') {
         // content.jsに設定の再適用を指示
         chrome.tabs.sendMessage(tabId, { type: 'URL_CHANGED' }).catch(() => {});
         // アイコンも更新
         updateIconForTab(tabId);
     }
-    // --- ▲▲▲ ここまでが変更点 ▲▲▲
 });
 
 chrome.storage.onChanged.addListener((changes, namespace) => {
@@ -128,44 +126,54 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
     if (!changedKey) return;
 
-    // ページ単位の設定（URLキー）の場合は何もしない
-    // URLには必ず "/" が含まれるが、ドメイン名には含まれないことを利用
+    const newVolume = newVolumes[changedKey]; // Can be undefined if the key was deleted
+
+    // Check if the change is for a specific page URL or a domain
     if (changedKey.includes('/')) {
-        return;
-    }
-
-    // ドメイン単位の設定が変更された場合、関連する全タブに通知
-    const changedDomain = changedKey;
-    const newVolume = newVolumes[changedDomain]; // 削除された場合はundefined
-
-    chrome.tabs.query({}, (tabs) => {
-        for (const tab of tabs) {
-            if (tab.url) {
-                try {
-                    const url = new URL(tab.url);
-                    if (url.hostname === changedDomain) {
-                        // 削除された場合(undefined)は、デフォルト音量(100)を送信するイメージだが、
-                        // content.js側でundefinedを受け取るとデフォルト値が適用されるので、
-                        // ここではそのまま送信する。
-                        chrome.tabs.sendMessage(tab.id, {
-                            type: 'SYNC_VOLUME',
-                            volume: newVolume
-                        }).catch(() => {
-                            // console.log(`Could not send message to tab ${tab.id}, it might be closed or restricted.`);
-                        });
-                    }
-                } catch (e) {
-                    // console.warn(`Invalid URL encountered in tab ${tab.id}: ${tab.url}`);
+        // Change is for a specific URL.
+        // Query all tabs, normalize their URLs, and sync the ones that match.
+        const targetUrl = changedKey;
+        chrome.tabs.query({}, (tabs) => {
+            for (const tab of tabs) {
+                if (tab.url && normalizeUrl(tab.url) === targetUrl) {
+                    chrome.tabs.sendMessage(tab.id, {
+                        type: 'SYNC_VOLUME',
+                        volume: newVolume
+                    }).catch(() => {
+                        // console.log(`Could not send message to tab ${tab.id}`);
+                    });
                 }
             }
-        }
-    });
+        });
+    } else {
+        // Change is for a domain, sync all tabs under that domain
+        const changedDomain = changedKey;
+        chrome.tabs.query({}, (tabs) => {
+            for (const tab of tabs) {
+                if (tab.url) {
+                    try {
+                        const url = new URL(tab.url);
+                        if (url.hostname === changedDomain) {
+                            chrome.tabs.sendMessage(tab.id, {
+                                type: 'SYNC_VOLUME',
+                                volume: newVolume
+                            }).catch(() => {
+                                // console.log(`Could not send message to tab ${tab.id}`);
+                            });
+                        }
+                    } catch (e) {
+                        // console.warn(`Invalid URL: ${tab.url}`);
+                    }
+                }
+            }
+        });
+    }
 });
 
 function normalizeUrl(urlString) {
     try {
         const url = new URL(urlString);
-        const paramsToRemove = ['t', 'si', 'feature'];
+        const paramsToRemove = ['t', 'si', 'feature', 'list', 'index', 'ab_channel'];
         url.searchParams.forEach((value, key) => {
             if (key.startsWith('utm_') || paramsToRemove.includes(key)) {
                 url.searchParams.delete(key);
@@ -174,4 +182,3 @@ function normalizeUrl(urlString) {
         return url.origin + url.pathname + url.search;
     } catch (e) { return urlString; }
 }
-
