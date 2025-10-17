@@ -128,38 +128,45 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
     if (!changedKey) return;
 
-    // ページ単位の設定（URLキー）の場合は何もしない
-    // URLには必ず "/" が含まれるが、ドメイン名には含まれないことを利用
+    const newVolume = newVolumes[changedKey]; // Can be undefined if the key was deleted
+
+    // Check if the change is for a specific page URL or a domain
     if (changedKey.includes('/')) {
-        return;
-    }
-
-    // ドメイン単位の設定が変更された場合、関連する全タブに通知
-    const changedDomain = changedKey;
-    const newVolume = newVolumes[changedDomain]; // 削除された場合はundefined
-
-    chrome.tabs.query({}, (tabs) => {
-        for (const tab of tabs) {
-            if (tab.url) {
-                try {
-                    const url = new URL(tab.url);
-                    if (url.hostname === changedDomain) {
-                        // 削除された場合(undefined)は、デフォルト音量(100)を送信するイメージだが、
-                        // content.js側でundefinedを受け取るとデフォルト値が適用されるので、
-                        // ここではそのまま送信する。
-                        chrome.tabs.sendMessage(tab.id, {
-                            type: 'SYNC_VOLUME',
-                            volume: newVolume
-                        }).catch(() => {
-                            // console.log(`Could not send message to tab ${tab.id}, it might be closed or restricted.`);
-                        });
+        // Change is for a specific URL, sync only tabs with the exact same URL
+        const targetUrl = changedKey;
+        chrome.tabs.query({ url: targetUrl }, (tabs) => {
+            for (const tab of tabs) {
+                chrome.tabs.sendMessage(tab.id, {
+                    type: 'SYNC_VOLUME',
+                    volume: newVolume
+                }).catch(() => {
+                    // console.log(`Could not send message to tab ${tab.id}`);
+                });
+            }
+        });
+    } else {
+        // Change is for a domain, sync all tabs under that domain
+        const changedDomain = changedKey;
+        chrome.tabs.query({}, (tabs) => {
+            for (const tab of tabs) {
+                if (tab.url) {
+                    try {
+                        const url = new URL(tab.url);
+                        if (url.hostname === changedDomain) {
+                            chrome.tabs.sendMessage(tab.id, {
+                                type: 'SYNC_VOLUME',
+                                volume: newVolume
+                            }).catch(() => {
+                                // console.log(`Could not send message to tab ${tab.id}`);
+                            });
+                        }
+                    } catch (e) {
+                        // console.warn(`Invalid URL: ${tab.url}`);
                     }
-                } catch (e) {
-                    // console.warn(`Invalid URL encountered in tab ${tab.id}: ${tab.url}`);
                 }
             }
-        }
-    });
+        });
+    }
 });
 
 function normalizeUrl(urlString) {
