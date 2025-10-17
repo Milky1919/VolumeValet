@@ -1,7 +1,7 @@
 // offscreen.js
 
 const canvas = document.getElementById('iconCanvas');
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
 const baseIcon = new Image();
 baseIcon.src = chrome.runtime.getURL('images/icon48.png');
