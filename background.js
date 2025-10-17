@@ -63,16 +63,23 @@ async function updateIconForTab(tabId) {
 }
 
 async function drawIcon(state, tabId) {
-    await setupOffscreenDocument('offscreen.html');
+    try {
+        await setupOffscreenDocument('offscreen.html');
 
-    const imageData = await chrome.runtime.sendMessage({
-        target: 'offscreen',
-        action: 'drawIcon',
-        state: state
-    });
+        const rawImageData = await chrome.runtime.sendMessage({
+            target: 'offscreen',
+            action: 'drawIcon',
+            state: state
+        });
 
-    if (imageData) {
-        await chrome.action.setIcon({ imageData: imageData, tabId: tabId });
+        if (rawImageData && rawImageData.data) {
+            const imageData = new ImageData(new Uint8ClampedArray(rawImageData.data), rawImageData.width, rawImageData.height);
+            await chrome.action.setIcon({ imageData: imageData, tabId: tabId });
+        }
+    } catch (error) {
+        console.warn(`Could not draw icon for tab ${tabId}:`, error);
+        // Fallback to default icon if drawing fails
+        await chrome.action.setIcon({ path: "images/icon48.png", tabId: tabId });
     }
 }
 

@@ -53,7 +53,13 @@ function drawIcon(state) {
         drawPinBadge();
     }
     
-    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // ImageData objects can't be sent over messaging. Send the raw data instead.
+    return {
+        data: Array.from(imageData.data),
+        width: imageData.width,
+        height: imageData.height
+    };
 }
 
 function drawMuteOverlay() {
