@@ -1,6 +1,6 @@
-// content.js v1.4.2 (Critical Bug Fix)
+// content.js v1.4.3 (Final Manual Fix)
 
-if (typeof window.volumeValet === 'undefined') {
+if (typeof window.volumeValet === 'undefined' || !window.volumeValet.initialized) {
     class ContentScript {
         constructor() {
             this.audioContext = null;
@@ -8,6 +8,7 @@ if (typeof window.volumeValet === 'undefined') {
             this.observer = null;
             this.currentVolume = 1.0;
             this.isUserInteracted = false;
+            this.initialized = true; // 初期化フラグ
 
             this.initialize();
         }
@@ -21,14 +22,14 @@ if (typeof window.volumeValet === 'undefined') {
         setupMessageListener() {
             chrome.runtime.onMessage.addListener((message) => {
                 if (message.type === 'setVolume') {
-                    // AudioContextがなくてもボリューム値だけは先に更新しておく
+                    // 先にボリューム値を更新し、その後でAudioContextの処理を行う
                     this.currentVolume = message.value / 100;
-                    this.ensureAudioContext().then(() => {
-                        this.setVolumeForAllNodes(message.value);
-                    });
+                    this.setVolumeForAllNodes(message.value); // 既存のノード音量を即時変更
+                    this.ensureAudioContext(); // 新規要素のためにスキャンをトリガー
                 } else if (message.type === 'URL_CHANGED') {
                     this.applySettings();
                 }
+                return true; // 非同期応答を示す
             });
         }
         
@@ -37,50 +38,54 @@ if (typeof window.volumeValet === 'undefined') {
             return new Promise(resolve => {
                 const listener = () => {
                     this.isUserInteracted = true;
-                    ['click', 'keydown', 'mousedown', 'touchstart'].forEach(type => {
-                        window.removeEventListener(type, listener, { capture: true });
-                    });
+                    window.removeEventListener('click', listener, { capture: true });
+                    window.removeEventListener('keydown', listener, { capture: true });
                     resolve();
                 };
-                ['click', 'keydown', 'mousedown', 'touchstart'].forEach(type => {
-                    window.addEventListener(type, listener, { once: true, capture: true });
-                });
+                window.addEventListener('click', listener, { once: true, capture: true });
+                window.addEventListener('keydown', listener, { once: true, capture: true });
             });
         }
         
         async ensureAudioContext() {
-            if (!this.audioContext) {
-                 await this.waitForUserInteraction();
-                try {
+            if (this.audioContext && this.audioContext.state === 'running') {
+                this.scanAndProcessAllMedia();
+                return;
+            }
+            if (!this.isUserInteracted) {
+                await this.waitForUserInteraction();
+            }
+            try {
+                if (!this.audioContext) {
                     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                } catch (e) { console.error('VolumeValet: Web Audio API not supported.', e); return; }
+                }
+                if (this.audioContext.state === 'suspended') {
+                    await this.audioContext.resume();
+                }
+                this.scanAndProcessAllMedia();
+            } catch (e) { 
+                console.error('VolumeValet: Error ensuring AudioContext.', e); 
             }
-            if (this.audioContext.state === 'suspended') {
-                await this.audioContext.resume();
-            }
-            // 新しいメディア要素をスキャンして処理する
-            this.scanAndProcessAllMedia();
         }
 
         async applySettings() {
             const settings = await chrome.storage.local.get(['siteVolumes', 'maxVolume']);
             const domain = window.location.hostname;
+            const pageUrl = this.normalizeUrl(window.location.href);
             
-            const key = settings.siteVolumes?.[this.normalizeUrl(window.location.href)] !== undefined
-                ? this.normalizeUrl(window.location.href)
-                : domain;
-                
+            const key = settings.siteVolumes?.[pageUrl] !== undefined ? pageUrl : domain;
             const maxVolume = settings.maxVolume || 200;
             let volumeToApply = settings.siteVolumes?.[key] ?? 100;
+
             if (volumeToApply > maxVolume) volumeToApply = maxVolume;
             
-            // --- ▼▼▼ ここが最重要修正点 ▼▼▼ ---
-            // 1. まず先にボリューム値をプロパティに設定する
+            // ★★★ 最重要修正点 ★★★
+            // 1. 必ず先にthis.currentVolumeプロパティを更新する
             this.currentVolume = volumeToApply / 100;
-            // 2. その後でAudioContextを準備し、全ノードにボリュームを適用する
+            
+            // 2. AudioContextの準備と音量適用を行う
             await this.ensureAudioContext();
             this.setVolumeForAllNodes(volumeToApply);
-            // --- ▲▲▲ ここまでが最重要修正点 ▲▲▲
         }
 
         processMediaElement(element) {
@@ -89,13 +94,12 @@ if (typeof window.volumeValet === 'undefined') {
             try {
                 const source = this.audioContext.createMediaElementSource(element);
                 const gainNode = this.audioContext.createGain();
-                // 必ず最新のthis.currentVolumeが使われるようにする
-                gainNode.gain.value = this.currentVolume;
+                gainNode.gain.value = this.currentVolume; // 正しい初期音量を設定
                 source.connect(gainNode).connect(this.audioContext.destination);
                 this.gainNodes.set(element, gainNode);
             } catch (e) {
                 if (e.name !== 'InvalidStateError') {
-                    console.warn('VolumeValet: Could not process media element:', element, e);
+                    // console.warn('VolumeValet: Could not process media element:', element, e);
                 }
             }
         }
@@ -106,16 +110,15 @@ if (typeof window.volumeValet === 'undefined') {
         }
 
         setupMutationObserver() {
+            if (this.observer) this.observer.disconnect();
             this.observer = new MutationObserver((mutations) => {
                 for (const mutation of mutations) {
                     for (const node of mutation.addedNodes) {
-                        if (node.nodeType === 1) { // ELEMENT_NODE
-                            if (node.matches('video, audio')) {
-                                this.ensureAudioContext().then(() => this.processMediaElement(node));
+                        if (node.nodeType === 1) {
+                            const media = node.matches('video, audio') ? [node] : Array.from(node.querySelectorAll('video, audio'));
+                            if (media.length > 0) {
+                                this.ensureAudioContext();
                             }
-                            node.querySelectorAll('video, audio').forEach(el => {
-                                this.ensureAudioContext().then(() => this.processMediaElement(el));
-                            });
                         }
                     }
                 }
@@ -128,7 +131,6 @@ if (typeof window.volumeValet === 'undefined') {
             if (this.audioContext) {
                 this.gainNodes.forEach((gainNode) => {
                     if (gainNode?.gain) {
-                       // gain.valueの直接設定から、よりスムーズなsetTargetAtTimeに変更
                        gainNode.gain.setTargetAtTime(this.currentVolume, this.audioContext.currentTime, 0.015);
                     }
                 });
