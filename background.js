@@ -13,7 +13,7 @@ async function setupOffscreenDocument(path) {
     } else {
         creating = chrome.offscreen.createDocument({
             url: path,
-            reasons: ['DOM_PARSER'],
+            reasons: ['BLOBS'],
             justification: 'to dynamically generate extension icons',
         });
         await creating;
@@ -24,12 +24,12 @@ async function setupOffscreenDocument(path) {
 async function updateIconForTab(tabId) {
     if (!tabId) return;
 
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab || !tab.url || !tab.url.startsWith('http')) {
-        chrome.action.setIcon({ path: "images/icon48.png", tabId: tabId });
-        chrome.action.setBadgeText({ text: '', tabId: tabId });
-        return;
-    }
+    try {
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab || !tab.url || !tab.url.startsWith('http')) {
+            await drawIcon('unset', tabId);
+            return;
+        }
 
     const url = new URL(tab.url);
     const domain = url.hostname;
@@ -49,23 +49,40 @@ async function updateIconForTab(tabId) {
         iconState = 'unset';
     }
     
-    await drawIcon(iconState, tabId);
-    chrome.action.setBadgeText({ text: '', tabId: tabId });
+        await drawIcon(iconState, tabId);
+        chrome.action.setBadgeText({ text: '', tabId: tabId });
+
+    } catch (error) {
+        if (error.message.includes('No tab with id') || error.message.includes('Invalid tab ID')) {
+            // Tab was closed, ignore the error.
+        } else {
+            console.error("Failed to update icon:", error);
+        }
+    }
 }
 
 async function drawIcon(state, tabId) {
-    await setupOffscreenDocument('offscreen.html');
     try {
-        const imageData = await chrome.runtime.sendMessage({
+        await setupOffscreenDocument('offscreen.html');
+
+        const rawImageData = await chrome.runtime.sendMessage({
             target: 'offscreen',
             action: 'drawIcon',
             state: state
         });
-        if (imageData) {
-            chrome.action.setIcon({ imageData: imageData, tabId: tabId });
+
+        if (rawImageData && rawImageData.data) {
+            const imageData = new ImageData(
+                new Uint8ClampedArray(rawImageData.data),
+                rawImageData.width,
+                rawImageData.height
+            );
+            await chrome.action.setIcon({ imageData: imageData, tabId: tabId });
         }
     } catch (error) {
-        console.warn("Could not draw icon, offscreen document might be closing.", error);
+        console.warn(`Could not draw icon for tab ${tabId}:`, error);
+        // Fallback to default icon if drawing fails
+        await chrome.action.setIcon({ path: "images/icon48.png", tabId: tabId });
     }
 }
 
