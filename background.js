@@ -173,7 +173,7 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 function normalizeUrl(urlString) {
     try {
         const url = new URL(urlString);
-        const paramsToRemove = ['t', 'si', 'feature'];
+        const paramsToRemove = ['t', 'si', 'feature', 'list', 'index', 'ab_channel'];
         url.searchParams.forEach((value, key) => {
             if (key.startsWith('utm_') || paramsToRemove.includes(key)) {
                 url.searchParams.delete(key);

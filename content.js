@@ -1,164 +1,128 @@
-// content.js v1.4.3 (Final Manual Fix)
+// content.js v2.0.0 (Pre-emptive Mute Architecture)
 
-if (typeof window.volumeValet === 'undefined' || !window.volumeValet.initialized) {
-    class ContentScript {
-        constructor() {
-            this.audioContext = null;
-            this.gainNodes = new Map();
-            this.observer = null;
-            this.currentVolume = 1.0;
-            this.isUserInteracted = false;
-            this.initialized = true; // 初期化フラグ
+// Prevent multiple initializations
+if (typeof window.volumeValet === 'undefined') {
+    window.volumeValet = true; // Simple flag to prevent re-injection
 
-            this.initialize();
+    const mediaMap = new WeakMap(); // Tracks media elements and their associated audio nodes
+
+    // 1. Core Logic: Apply Volume Settings
+    async function applySettings(element) {
+        if (!element) return;
+
+        const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
+        const domain = window.location.hostname;
+        // The normalizeUrl function in content.js must be kept in sync with background.js
+        const pageUrl = normalizeUrl(window.location.href);
+
+        const pageVolume = siteVolumes[pageUrl];
+        const domainVolume = siteVolumes[domain];
+
+        let targetVolume;
+        if (pageVolume !== undefined) {
+            targetVolume = pageVolume / 100;
+        } else if (domainVolume !== undefined) {
+            targetVolume = domainVolume / 100;
+        } else {
+            targetVolume = 1.0; // Default to 100% if no setting is found
         }
 
-        async initialize() {
-            this.setupMessageListener();
-            this.setupMutationObserver();
-            await this.applySettings();
-        }
+        setVolume(element, targetVolume);
+    }
 
-        setupMessageListener() {
-            chrome.runtime.onMessage.addListener((message) => {
-                if (message.type === 'setVolume') {
-                    // 先にボリューム値を更新し、その後でAudioContextの処理を行う
-                    this.currentVolume = message.value / 100;
-                    this.setVolumeForAllNodes(message.value); // 既存のノード音量を即時変更
-                    this.ensureAudioContext(); // 新規要素のためにスキャンをトリガー
-                } else if (message.type === 'URL_CHANGED') {
-                    this.applySettings();
-                } else if (message.type === 'SYNC_VOLUME') {
-                    // ドメイン設定の同期メッセージを受信
-                    if (message.volume !== undefined) {
-                        // 値が指定されていれば、その音量を即時適用
-                        this.setVolumeForAllNodes(message.volume);
-                    } else {
-                        // 値がundefinedの場合（＝ドメイン設定が削除された場合）、
-                        // 設定を再評価して正しいフォールバックを適用する
-                        this.applySettings();
-                    }
-                }
-                return true; // 非同期応答を示す
-            });
-        }
-        
-        waitForUserInteraction() {
-            if (this.isUserInteracted) return Promise.resolve();
-            return new Promise(resolve => {
-                const listener = () => {
-                    this.isUserInteracted = true;
-                    window.removeEventListener('click', listener, { capture: true });
-                    window.removeEventListener('keydown', listener, { capture: true });
-                    resolve();
-                };
-                window.addEventListener('click', listener, { once: true, capture: true });
-                window.addEventListener('keydown', listener, { once: true, capture: true });
-            });
-        }
-        
-        async ensureAudioContext() {
-            if (this.audioContext && this.audioContext.state === 'running') {
-                this.scanAndProcessAllMedia();
-                return;
-            }
-            if (!this.isUserInteracted) {
-                await this.waitForUserInteraction();
-            }
-            try {
-                if (!this.audioContext) {
-                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                if (this.audioContext.state === 'suspended') {
-                    await this.audioContext.resume();
-                }
-                this.scanAndProcessAllMedia();
-            } catch (e) { 
-                console.error('VolumeValet: Error ensuring AudioContext.', e); 
-            }
-        }
-
-        async applySettings() {
-            const settings = await chrome.storage.local.get(['siteVolumes', 'maxVolume']);
-            const domain = window.location.hostname;
-            const pageUrl = this.normalizeUrl(window.location.href);
-            
-            const key = settings.siteVolumes?.[pageUrl] !== undefined ? pageUrl : domain;
-            const maxVolume = settings.maxVolume || 200;
-            let volumeToApply = settings.siteVolumes?.[key] ?? 100;
-
-            if (volumeToApply > maxVolume) volumeToApply = maxVolume;
-            
-            // ★★★ 最重要修正点 ★★★
-            // 1. 必ず先にthis.currentVolumeプロパティを更新する
-            this.currentVolume = volumeToApply / 100;
-            
-            // 2. AudioContextの準備と音量適用を行う
-            await this.ensureAudioContext();
-            this.setVolumeForAllNodes(volumeToApply);
-        }
-
-        processMediaElement(element) {
-            if (!this.audioContext || this.gainNodes.has(element)) return;
-
-            try {
-                const source = this.audioContext.createMediaElementSource(element);
-                const gainNode = this.audioContext.createGain();
-                gainNode.gain.value = this.currentVolume; // 正しい初期音量を設定
-                source.connect(gainNode).connect(this.audioContext.destination);
-                this.gainNodes.set(element, gainNode);
-            } catch (e) {
-                if (e.name !== 'InvalidStateError') {
-                    // console.warn('VolumeValet: Could not process media element:', element, e);
-                }
-            }
-        }
-        
-        scanAndProcessAllMedia() {
-            if (!this.audioContext) return;
-            document.querySelectorAll('video, audio').forEach(el => this.processMediaElement(el));
-        }
-
-        setupMutationObserver() {
-            if (this.observer) this.observer.disconnect();
-            this.observer = new MutationObserver((mutations) => {
-                for (const mutation of mutations) {
-                    for (const node of mutation.addedNodes) {
-                        if (node.nodeType === 1) {
-                            const media = node.matches('video, audio') ? [node] : Array.from(node.querySelectorAll('video, audio'));
-                            if (media.length > 0) {
-                                this.ensureAudioContext();
-                            }
-                        }
-                    }
-                }
-            });
-            this.observer.observe(document.documentElement, { childList: true, subtree: true });
-        }
-
-        setVolumeForAllNodes(volumePercentage) {
-            this.currentVolume = volumePercentage / 100;
-            if (this.audioContext) {
-                this.gainNodes.forEach((gainNode) => {
-                    if (gainNode?.gain) {
-                       gainNode.gain.setTargetAtTime(this.currentVolume, this.audioContext.currentTime, 0.015);
-                    }
-                });
-            }
-        }
-        
-        normalizeUrl(urlString) {
-            try {
-                const url = new URL(urlString);
-                const paramsToRemove = ['t', 'si', 'feature'];
-                url.searchParams.forEach((value, key) => {
-                    if (key.startsWith('utm_') || paramsToRemove.includes(key)) {
-                        url.searchParams.delete(key);
-                    }
-                });
-                return url.origin + url.pathname + url.search;
-            } catch (e) { return urlString; }
+    // 2. Audio Control: Set Volume via Web Audio API
+    function setVolume(element, volume) {
+        if (!mediaMap.has(element)) return; // Should not happen if called correctly
+        const { gainNode, audioContext } = mediaMap.get(element);
+        if (gainNode && audioContext) {
+            // Use setTargetAtTime for a smooth transition
+            gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, 0.015);
         }
     }
-    window.volumeValet = new ContentScript();
+
+    // 3. The "Pre-emptive Mute" Handler
+    function handleNewMediaElement(element) {
+        if (mediaMap.has(element)) return; // Already processing this element
+
+        // Create a unique AudioContext and GainNode for each media element
+        // This is crucial for sites with multiple videos (e.g., Twitter, Reddit)
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaElementSource(element);
+        const gainNode = audioContext.createGain();
+
+        // ** PRE-EMPTIVE MUTE **
+        // Mute the element immediately upon detection, before it can play.
+        gainNode.gain.value = 0;
+
+        source.connect(gainNode).connect(audioContext.destination);
+        mediaMap.set(element, { audioContext, gainNode });
+
+        // Define the handler for when the media is ready to play
+        const onCanPlay = () => {
+            // Resume AudioContext if it was suspended (browser policy)
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+            // Apply the user's saved setting
+            applySettings(element);
+            // Clean up the event listener after it has served its purpose
+            element.removeEventListener('canplay', onCanPlay);
+        };
+
+        // Wait for the 'canplay' event to apply the final volume
+        element.addEventListener('canplay', onCanPlay, { once: true });
+    }
+
+    // 4. MutationObserver: Detect new media elements added to the page
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType === 1) { // ELEMENT_NODE
+                    if (node.matches('video, audio')) {
+                        handleNewMediaElement(node);
+                    }
+                    node.querySelectorAll('video, audio').forEach(handleNewMediaElement);
+                }
+            }
+        }
+    });
+
+    // Start observing the entire document
+    observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+    });
+
+    // Initial scan for media elements already present on the page
+    document.querySelectorAll('video, audio').forEach(handleNewMediaElement);
+
+    // 5. Message Listener: Handle commands from the background script
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.type === 'URL_CHANGED' || message.type === 'SYNC_VOLUME') {
+            // Re-apply settings for all currently tracked media elements
+            document.querySelectorAll('video, audio').forEach(element => {
+                if(mediaMap.has(element)) {
+                   applySettings(element);
+                }
+            });
+        }
+        return true; // Indicate that the response may be asynchronous
+    });
+
+    // 6. Utility: URL Normalization
+    function normalizeUrl(urlString) {
+        try {
+            const url = new URL(urlString);
+            // This list MUST be kept in sync with background.js
+            const paramsToRemove = ['t', 'si', 'feature', 'list', 'index', 'ab_channel'];
+            url.searchParams.forEach((value, key) => {
+                if (key.startsWith('utm_') || paramsToRemove.includes(key)) {
+                    url.searchParams.delete(key);
+                }
+            });
+            return url.origin + url.pathname + url.search;
+        } catch (e) {
+            return urlString;
+        }
+    }
 }
