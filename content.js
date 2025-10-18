@@ -102,19 +102,22 @@ if (typeof window.volumeValet === 'undefined') {
 
         const isBoosted = volume > 1.0;
 
-        // The audio path is now guaranteed to exist. This function only handles CHANGES.
-        // It switches the compressor in or out of the audio path as needed.
-        if (isBoosted && !mediaNodes.isCompressorActive) {
-            // Switch to: source -> compressor -> gain -> destination
-            source.disconnect(gainNode);
-            source.connect(compressor).connect(gainNode);
-            mediaNodes.isCompressorActive = true;
-        } else if (!isBoosted && mediaNodes.isCompressorActive) {
-            // Switch back to: source -> gain -> destination
-            source.disconnect(compressor);
-            source.connect(gainNode);
-            mediaNodes.isCompressorActive = false;
+        // This function can be called before the source node is created.
+        // The isCompressorActive flag is set, and the source will be connected
+        // to the correct node when it is created in createAndConnectSource.
+        if (source) {
+            // If the source exists, we can manage its connections dynamically.
+            if (isBoosted && !mediaNodes.isCompressorActive) {
+                // Switch to: source -> compressor -> gain -> destination
+                source.disconnect(gainNode);
+                source.connect(compressor).connect(gainNode);
+            } else if (!isBoosted && mediaNodes.isCompressorActive) {
+                // Switch back to: source -> gain -> destination
+                source.disconnect(compressor);
+                source.connect(gainNode);
+            }
         }
+        mediaNodes.isCompressorActive = isBoosted;
 
         // Apply the volume setting smoothly
         gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, 0.015);
@@ -124,10 +127,9 @@ if (typeof window.volumeValet === 'undefined') {
     function handleNewMediaElement(element) {
         if (mediaMap.has(element)) return; // Already processing this element
 
-        // Create a unique AudioContext and GainNode for each media element
-        // This is crucial for sites with multiple videos (e.g., Twitter, Reddit)
+        // STAGE 1: Create the downstream audio graph, but NOT the source node.
+        // The source node will only be created when the 'playing' event fires.
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const source = audioContext.createMediaElementSource(element);
         const gainNode = audioContext.createGain();
         const compressor = audioContext.createDynamicsCompressor();
 
@@ -138,27 +140,58 @@ if (typeof window.volumeValet === 'undefined') {
         compressor.attack.setValueAtTime(0.003, audioContext.currentTime); // Fast attack
         compressor.release.setValueAtTime(0.25, audioContext.currentTime); // Smooth release
 
-        // Establish the default audio path immediately: source -> gain -> destination
-        source.connect(gainNode);
+        // Connect the gain node to the destination. This is crucial for pre-emptive mute.
         gainNode.connect(audioContext.destination);
 
         // ** PRE-EMPTIVE MUTE **
-        // Now that the path is established, mute the element before it can play.
+        // Mute the element immediately, even before the source node exists.
         gainNode.gain.value = 0;
 
-        // Store all nodes for dynamic graph changes. Mark compressor as inactive.
-        mediaMap.set(element, { audioContext, source, gainNode, compressor, isCompressorActive: false });
+        // Store the incomplete graph. `source` is null until 'playing' event.
+        mediaMap.set(element, { audioContext, source: null, gainNode, compressor, isCompressorActive: false });
 
-        // Define the handler for when the media is ready to play
+        // Define a one-time handler for setting the initial volume once the media is playable.
         const onCanPlay = async () => {
-            // Apply the user's saved setting. This function now handles resuming the context.
+            // This function sets the gainNode's value. It doesn't need the source node.
             await reliableSetInitialVolume(element);
-            // Clean up the event listener after it has served its purpose
-            element.removeEventListener('canplay', onCanPlay);
+            element.removeEventListener('canplay', onCanPlay); // Clean up
         };
 
-        // Wait for the 'canplay' event to apply the final volume
+        // Define a one-time handler for creating the source node when playback actually starts.
+        const onPlaying = () => {
+            createAndConnectSource(element); // Stage 2 of initialization
+            element.removeEventListener('playing', onPlaying); // Clean up
+        };
+
+        // Wait for 'canplay' to set the volume and 'playing' to build the final audio path.
         element.addEventListener('canplay', onCanPlay, { once: true });
+        element.addEventListener('playing', onPlaying, { once: true });
+    }
+
+    // STAGE 2: Create the source node and connect it to the existing downstream graph.
+    // This is called by the 'playing' event handler.
+    function createAndConnectSource(element) {
+        if (!mediaMap.has(element)) return;
+
+        const mediaNodes = mediaMap.get(element);
+        const { audioContext, gainNode, compressor } = mediaNodes;
+
+        // If a source already exists, do nothing. This can happen in some edge cases.
+        if (mediaNodes.source) return;
+
+        try {
+            const source = audioContext.createMediaElementSource(element);
+            mediaNodes.source = source; // Update the map with the new source
+
+            // Connect to the correct next node, respecting the current "boost" state.
+            if (mediaNodes.isCompressorActive) {
+                source.connect(compressor);
+            } else {
+                source.connect(gainNode);
+            }
+        } catch (error) {
+            // This can fail if the element is in a bad state.
+        }
     }
 
     // 4. MutationObserver: Detect new media elements added to the page
