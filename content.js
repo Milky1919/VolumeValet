@@ -181,8 +181,19 @@ if (typeof window.volumeValet === 'undefined') {
             element.removeEventListener('playing', onPlaying); // Clean up
         };
 
+        // Fallback for sites where 'playing' does not fire reliably on load.
+        const onTimeUpdate = () => {
+            // As soon as playback starts (currentTime > 0), try to connect the source.
+            if (element.currentTime > 0) {
+                createAndConnectSource(element);
+                // Once connected, this listener is no longer needed.
+                element.removeEventListener('timeupdate', onTimeUpdate);
+            }
+        };
+
         element.addEventListener('canplay', onCanPlay, { once: true });
         element.addEventListener('playing', onPlaying, { once: true });
+        element.addEventListener('timeupdate', onTimeUpdate);
     }
 
     // STAGE 2: Create the media source and connect it to the static graph.
