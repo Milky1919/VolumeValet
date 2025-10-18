@@ -1,4 +1,4 @@
-const CONTENT_SCRIPT_VERSION = "1.4.1";
+const CONTENT_SCRIPT_VERSION = "1.5.0";
 
 // Prevent multiple initializations
 if (typeof window.volumeValet === 'undefined') {
@@ -96,103 +96,122 @@ if (typeof window.volumeValet === 'undefined') {
         const mediaNodes = mediaMap.get(element);
         const { audioContext, source, gainNode, compressor } = mediaNodes;
 
+        // If the source node hasn't been created yet, queue the volume command.
+        if (!source) {
+            mediaNodes.pendingVolume = volume;
+            return; // Exit early
+        }
+
         if (!audioContext || !gainNode || !compressor) return;
 
         try {
-            // This is the core of the new architecture. ALWAYS ensure the context is running.
             await ensureContextIsRunning(audioContext);
 
             const isBoosted = volume > 1.0;
+            const now = audioContext.currentTime;
+            const rampTime = 0.015; // Standard ramp time for smooth transitions
 
-            // The logic for switching the compressor must only run if the source exists.
-            if (source) {
-                if (isBoosted && !mediaNodes.isCompressorActive) {
-                    source.disconnect(gainNode);
-                    source.connect(compressor).connect(gainNode);
-                } else if (!isBoosted && mediaNodes.isCompressorActive) {
-                    source.disconnect(compressor);
-                    source.connect(gainNode);
-                }
+            // Instead of disconnecting, we change the compressor's parameters
+            if (isBoosted) {
+                // Activate the "Safe Boost" limiter
+                compressor.threshold.setTargetAtTime(-10, now, rampTime);
+                compressor.knee.setTargetAtTime(0, now, rampTime);
+                compressor.ratio.setTargetAtTime(20, now, rampTime);
+            } else {
+                // Make the compressor transparent
+                compressor.threshold.setTargetAtTime(0, now, rampTime);
+                compressor.knee.setTargetAtTime(0, now, rampTime);
+                compressor.ratio.setTargetAtTime(1, now, rampTime);
             }
-            mediaNodes.isCompressorActive = isBoosted;
 
-            // Apply the volume setting smoothly. Use a slightly longer ramp for the initial set.
-            const rampTime = options.isInitial ? 0.05 : 0.015;
-            gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, rampTime);
+            const finalRampTime = options.isInitial ? 0.05 : rampTime;
+            gainNode.gain.setTargetAtTime(volume, now, finalRampTime);
 
         } catch (error) {
-            // The context was closed, so we can't do anything.
+            // The context might be closed.
         }
     }
 
-    // 3. The "Pre-emptive Mute" Handler
+    // 3. Audio Graph Initialization
     function handleNewMediaElement(element) {
         if (mediaMap.has(element)) return; // Already processing this element
 
-        // STAGE 1: Create the downstream audio graph, but NOT the source node.
-        // The source node will only be created when the 'playing' event fires.
+        // STAGE 1: Create the audio context and downstream nodes.
+        // This allows for pre-emptive muting before the media source is ready.
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const gainNode = audioContext.createGain();
         const compressor = audioContext.createDynamicsCompressor();
 
-        // Configure the compressor for "Safe Boost" (transparent limiting)
-        compressor.threshold.setValueAtTime(-10, audioContext.currentTime); // Start limiting at -10dB
-        compressor.knee.setValueAtTime(0, audioContext.currentTime);       // No knee, hard limiting
-        compressor.ratio.setValueAtTime(20, audioContext.currentTime);     // Strong compression
-        compressor.attack.setValueAtTime(0.003, audioContext.currentTime); // Fast attack
-        compressor.release.setValueAtTime(0.25, audioContext.currentTime); // Smooth release
-
-        // Connect the gain node to the destination. This is crucial for pre-emptive mute.
+        // The audio graph is now STATIC: Compressor -> Gain -> Destination.
+        // The source will be connected to the compressor in Stage 2.
+        compressor.connect(gainNode);
         gainNode.connect(audioContext.destination);
 
+        // Default the compressor to be transparent (not limiting).
+        // The setVolume function will adjust this as needed.
+        const now = audioContext.currentTime;
+        compressor.threshold.setValueAtTime(0, now);
+        compressor.knee.setValueAtTime(0, now);
+        compressor.ratio.setValueAtTime(1, now);
+        compressor.attack.setValueAtTime(0.003, now);
+        compressor.release.setValueAtTime(0.25, now);
+
         // ** PRE-EMPTIVE MUTE **
-        // Mute the element immediately, even before the source node exists.
+        // Mute the element immediately by setting gain to 0.
         gainNode.gain.value = 0;
 
-        // Store the incomplete graph. `source` is null until 'playing' event.
-        mediaMap.set(element, { audioContext, source: null, gainNode, compressor, isCompressorActive: false });
+        // Store the graph nodes. `source` is null and `pendingVolume` is unset.
+        mediaMap.set(element, {
+            audioContext,
+            source: null,
+            gainNode,
+            compressor,
+            pendingVolume: null
+        });
 
-        // Define a one-time handler for setting the initial volume once the media is playable.
+        // Define a one-time handler for setting the initial volume when the media can play.
         const onCanPlay = async () => {
-            // This function sets the gainNode's value. It doesn't need the source node.
             await reliableSetInitialVolume(element);
             element.removeEventListener('canplay', onCanPlay); // Clean up
         };
 
-        // Define a one-time handler for creating the source node when playback actually starts.
+        // Define a one-time handler for creating the source node when playback begins.
         const onPlaying = () => {
-            createAndConnectSource(element); // Stage 2 of initialization
+            createAndConnectSource(element); // Stage 2: Connect the media element
             element.removeEventListener('playing', onPlaying); // Clean up
         };
 
-        // Wait for 'canplay' to set the volume and 'playing' to build the final audio path.
         element.addEventListener('canplay', onCanPlay, { once: true });
         element.addEventListener('playing', onPlaying, { once: true });
     }
 
-    // STAGE 2: Create the source node and connect it to the existing downstream graph.
-    // This is called by the 'playing' event handler.
+    // STAGE 2: Create the media source and connect it to the static graph.
     function createAndConnectSource(element) {
         if (!mediaMap.has(element)) return;
 
         const mediaNodes = mediaMap.get(element);
-        const { audioContext, gainNode, compressor } = mediaNodes;
+        const { audioContext, compressor } = mediaNodes;
 
-        // If a source already exists, do nothing. This can happen in some edge cases.
+        // Do nothing if the source already exists.
         if (mediaNodes.source) return;
 
         try {
             const source = audioContext.createMediaElementSource(element);
-            mediaNodes.source = source; // Update the map with the new source
+            mediaNodes.source = source; // Store the source node
 
-            // Connect to the correct next node, respecting the current "boost" state.
-            if (mediaNodes.isCompressorActive) {
-                source.connect(compressor);
-            } else {
-                source.connect(gainNode);
+            // Connect the source to the start of our static graph.
+            // This is the only `connect` call needed for the source, and it never changes.
+            source.connect(compressor);
+
+            // ** FINALIZE QUEUED COMMANDS **
+            // If a volume command was queued while the source was being created, apply it now.
+            if (mediaNodes.pendingVolume !== null && typeof mediaNodes.pendingVolume === 'number') {
+                setVolume(element, mediaNodes.pendingVolume);
+                mediaNodes.pendingVolume = null; // Clear the queue
             }
+
         } catch (error) {
-            // This can fail if the element is in a bad state.
+            // This can fail if the element is in a bad state (e.g., from a different origin).
         }
     }
 
