@@ -96,13 +96,7 @@ if (typeof window.volumeValet === 'undefined') {
         const mediaNodes = mediaMap.get(element);
         const { audioContext, source, gainNode, compressor } = mediaNodes;
 
-        // If the source node hasn't been created yet, queue the volume command.
-        if (!source) {
-            mediaNodes.pendingVolume = volume;
-            return; // Exit early
-        }
-
-        if (!audioContext || !gainNode || !compressor) return;
+        if (!source || !audioContext || !gainNode || !compressor) return;
 
         try {
             await ensureContextIsRunning(audioContext);
@@ -169,12 +163,6 @@ if (typeof window.volumeValet === 'undefined') {
             pendingVolume: null
         });
 
-        // Define a one-time handler for setting the initial volume when the media can play.
-        const onCanPlay = async () => {
-            await reliableSetInitialVolume(element);
-            element.removeEventListener('canplay', onCanPlay); // Clean up
-        };
-
         // Define a one-time handler for creating the source node when playback begins.
         const onPlaying = () => {
             createAndConnectSource(element); // Stage 2: Connect the media element
@@ -191,7 +179,6 @@ if (typeof window.volumeValet === 'undefined') {
             }
         };
 
-        element.addEventListener('canplay', onCanPlay, { once: true });
         element.addEventListener('playing', onPlaying, { once: true });
         element.addEventListener('timeupdate', onTimeUpdate);
     }
@@ -214,12 +201,9 @@ if (typeof window.volumeValet === 'undefined') {
             // This is the only `connect` call needed for the source, and it never changes.
             source.connect(compressor);
 
-            // ** FINALIZE QUEUED COMMANDS **
-            // If a volume command was queued while the source was being created, apply it now.
-            if (mediaNodes.pendingVolume !== null && typeof mediaNodes.pendingVolume === 'number') {
-                setVolume(element, mediaNodes.pendingVolume);
-                mediaNodes.pendingVolume = null; // Clear the queue
-            }
+            // With the source connected, immediately apply the correct volume.
+            // This replaces the unreliable 'canplay' event handler.
+            reliableSetInitialVolume(element);
 
         } catch (error) {
             // This can fail if the element is in a bad state (e.g., from a different origin).
