@@ -34,10 +34,6 @@ if (typeof window.volumeValet === 'undefined') {
     async function reliableSetInitialVolume(element) {
         if (!element || !mediaMap.has(element)) return;
 
-        const { audioContext } = mediaMap.get(element);
-        if (!audioContext) return;
-
-
         // 1. Determine the target volume from storage
         const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
         const domain = window.location.hostname;
@@ -54,36 +50,24 @@ if (typeof window.volumeValet === 'undefined') {
             targetVolume = 1.0; // Default to 100%
         }
 
-        // 2. Retry Mechanism to combat race conditions on complex sites
+        // 2. Retry Mechanism. The robust `setVolume` function now handles all the
+        //    complexities of the AudioContext state.
         const maxRetries = 7;
         const initialDelay = 50; // ms
 
         for (let i = 0; i < maxRetries; i++) {
-            try {
-                // Ensure the AudioContext is running before trying to set volume
-                if (audioContext.state === 'suspended') {
-                    await audioContext.resume();
-                }
+            // Call the new, robust setVolume function. It will handle ensuring
+            // the context is running before applying the volume.
+            await setVolume(element, targetVolume, { isInitial: true });
 
-                // If the context was closed for any reason, we cannot proceed.
-                if (audioContext.state === 'closed') {
-                    return;
-                }
+            // Give the browser a moment to apply the change
+            await new Promise(resolve => setTimeout(resolve, 25));
 
-                setVolume(element, targetVolume);
-
-                // Give the browser a moment to apply the change
-                await new Promise(resolve => setTimeout(resolve, 25));
-
-                const { gainNode } = mediaMap.get(element) || {};
-                // Check if the gain value is close enough to the target
-                if (gainNode && Math.abs(gainNode.gain.value - targetVolume) < 0.01) {
-                    return; // Success
-                }
-            } catch (error) {
-                // Errors are possible if the element is removed during the process
+            const { gainNode } = mediaMap.get(element) || {};
+            // Check if the gain value is close enough to the target
+            if (gainNode && Math.abs(gainNode.gain.value - targetVolume) < 0.01) {
+                return; // Success
             }
-
 
             // Exponential backoff for subsequent retries
             const delay = initialDelay * Math.pow(2, i);
@@ -92,35 +76,52 @@ if (typeof window.volumeValet === 'undefined') {
     }
 
     // 2. Audio Control: Set Volume via Web Audio API
-    function setVolume(element, volume) {
-        if (!mediaMap.has(element)) return; // Should not happen if called correctly
+
+    // Centralized helper to ensure the AudioContext is running before any operation.
+    async function ensureContextIsRunning(audioContext) {
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
+        // If the context was closed, we can't do anything.
+        if (audioContext.state === 'closed') {
+            throw new Error("AudioContext is closed.");
+        }
+    }
+
+
+    async function setVolume(element, volume, options = {}) {
+        if (!mediaMap.has(element)) return;
 
         const mediaNodes = mediaMap.get(element);
         const { audioContext, source, gainNode, compressor } = mediaNodes;
 
-        if (!audioContext || !source || !gainNode || !compressor) return;
+        if (!audioContext || !gainNode || !compressor) return;
 
-        const isBoosted = volume > 1.0;
+        try {
+            // This is the core of the new architecture. ALWAYS ensure the context is running.
+            await ensureContextIsRunning(audioContext);
 
-        // This function can be called before the source node is created.
-        // The isCompressorActive flag is set, and the source will be connected
-        // to the correct node when it is created in createAndConnectSource.
-        if (source) {
-            // If the source exists, we can manage its connections dynamically.
-            if (isBoosted && !mediaNodes.isCompressorActive) {
-                // Switch to: source -> compressor -> gain -> destination
-                source.disconnect(gainNode);
-                source.connect(compressor).connect(gainNode);
-            } else if (!isBoosted && mediaNodes.isCompressorActive) {
-                // Switch back to: source -> gain -> destination
-                source.disconnect(compressor);
-                source.connect(gainNode);
+            const isBoosted = volume > 1.0;
+
+            // The logic for switching the compressor must only run if the source exists.
+            if (source) {
+                if (isBoosted && !mediaNodes.isCompressorActive) {
+                    source.disconnect(gainNode);
+                    source.connect(compressor).connect(gainNode);
+                } else if (!isBoosted && mediaNodes.isCompressorActive) {
+                    source.disconnect(compressor);
+                    source.connect(gainNode);
+                }
             }
-        }
-        mediaNodes.isCompressorActive = isBoosted;
+            mediaNodes.isCompressorActive = isBoosted;
 
-        // Apply the volume setting smoothly
-        gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, 0.015);
+            // Apply the volume setting smoothly. Use a slightly longer ramp for the initial set.
+            const rampTime = options.isInitial ? 0.05 : 0.015;
+            gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, rampTime);
+
+        } catch (error) {
+            // The context was closed, so we can't do anything.
+        }
     }
 
     // 3. The "Pre-emptive Mute" Handler
@@ -223,19 +224,25 @@ if (typeof window.volumeValet === 'undefined') {
             // Re-apply saved settings for all currently tracked media elements
             document.querySelectorAll('video, audio').forEach(element => {
                 if (mediaMap.has(element)) {
-                   applySettings(element);
+                   applySettings(element); // applySettings is async and calls setVolume
                 }
             });
         } else if (message.type === 'setVolume') {
-            // Apply a temporary volume from the popup slider in real-time
+            // Apply a temporary volume from the popup slider in real-time.
+            // This now awaits the robust setVolume function.
             const newVolume = message.value / 100;
+            const promises = [];
             document.querySelectorAll('video, audio').forEach(element => {
                 if (mediaMap.has(element)) {
-                    setVolume(element, newVolume);
+                    promises.push(setVolume(element, newVolume));
                 }
             });
+            Promise.all(promises).then(() => {
+                sendResponse({ success: true });
+            });
+            return true; // Keep the message channel open for the async response
         }
-        return true; // Indicate that the response may be asynchronous
+        return true;
     });
 
     // 6. Utility: URL Normalization
