@@ -32,7 +32,11 @@ if (typeof window.volumeValet === 'undefined') {
 
     // NEW: Reliably set the initial volume with a retry mechanism
     async function reliableSetInitialVolume(element) {
-        if (!element) return;
+        if (!element || !mediaMap.has(element)) return;
+
+        const { audioContext } = mediaMap.get(element);
+        if (!audioContext) return;
+
 
         // 1. Determine the target volume from storage
         const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
@@ -55,18 +59,31 @@ if (typeof window.volumeValet === 'undefined') {
         const initialDelay = 50; // ms
 
         for (let i = 0; i < maxRetries; i++) {
-            setVolume(element, targetVolume);
+            try {
+                // Ensure the AudioContext is running before trying to set volume
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
 
-            // Give the browser a moment to apply the change
-            await new Promise(resolve => setTimeout(resolve, 25));
+                // If the context was closed for any reason, we cannot proceed.
+                if (audioContext.state === 'closed') {
+                    return;
+                }
 
-            if (mediaMap.has(element)) {
-                const { gainNode } = mediaMap.get(element);
+                setVolume(element, targetVolume);
+
+                // Give the browser a moment to apply the change
+                await new Promise(resolve => setTimeout(resolve, 25));
+
+                const { gainNode } = mediaMap.get(element) || {};
                 // Check if the gain value is close enough to the target
                 if (gainNode && Math.abs(gainNode.gain.value - targetVolume) < 0.01) {
                     return; // Success
                 }
+            } catch (error) {
+                // Errors are possible if the element is removed during the process
             }
+
 
             // Exponential backoff for subsequent retries
             const delay = initialDelay * Math.pow(2, i);
@@ -132,13 +149,9 @@ if (typeof window.volumeValet === 'undefined') {
         mediaMap.set(element, { audioContext, source, gainNode, compressor, isCompressorActive: undefined });
 
         // Define the handler for when the media is ready to play
-        const onCanPlay = () => {
-            // Resume AudioContext if it was suspended (browser policy)
-            if (audioContext.state === 'suspended') {
-                audioContext.resume();
-            }
-            // Apply the user's saved setting
-            reliableSetInitialVolume(element);
+        const onCanPlay = async () => {
+            // Apply the user's saved setting. This function now handles resuming the context.
+            await reliableSetInitialVolume(element);
             // Clean up the event listener after it has served its purpose
             element.removeEventListener('canplay', onCanPlay);
         };
