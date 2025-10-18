@@ -1,10 +1,11 @@
-// content.js v2.0.0 (Pre-emptive Mute Architecture)
+const CONTENT_SCRIPT_VERSION = "1.4.1";
 
 // Prevent multiple initializations
 if (typeof window.volumeValet === 'undefined') {
     window.volumeValet = true; // Simple flag to prevent re-injection
 
-    const mediaMap = new WeakMap(); // Tracks media elements and their associated audio nodes
+    function initialize() {
+        const mediaMap = new WeakMap(); // Tracks media elements and their associated audio nodes
 
     // 1. Core Logic: Apply Volume Settings
     async function applySettings(element) {
@@ -261,4 +262,14 @@ if (typeof window.volumeValet === 'undefined') {
             return urlString;
         }
     }
+} // End of initialize()
+
+    // Start the version handshake
+    chrome.runtime.sendMessage({ type: 'GET_VERSION' }, (response) => {
+        if (response && response.version === CONTENT_SCRIPT_VERSION) {
+            initialize();
+        } else {
+            console.log('VolumeValet: Mismatched content script version. Disabling self.');
+        }
+    });
 }
