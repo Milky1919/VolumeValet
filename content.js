@@ -1,10 +1,11 @@
-// content.js v2.0.0 (Pre-emptive Mute Architecture)
+const CONTENT_SCRIPT_VERSION = "1.4.1";
 
 // Prevent multiple initializations
 if (typeof window.volumeValet === 'undefined') {
     window.volumeValet = true; // Simple flag to prevent re-injection
 
-    const mediaMap = new WeakMap(); // Tracks media elements and their associated audio nodes
+    function initialize() {
+        const mediaMap = new WeakMap(); // Tracks media elements and their associated audio nodes
 
     // 1. Core Logic: Apply Volume Settings
     async function applySettings(element) {
@@ -32,7 +33,7 @@ if (typeof window.volumeValet === 'undefined') {
 
     // NEW: Reliably set the initial volume with a retry mechanism
     async function reliableSetInitialVolume(element) {
-        if (!element) return;
+        if (!element || !mediaMap.has(element)) return;
 
         // 1. Determine the target volume from storage
         const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
@@ -50,22 +51,23 @@ if (typeof window.volumeValet === 'undefined') {
             targetVolume = 1.0; // Default to 100%
         }
 
-        // 2. Retry Mechanism to combat race conditions on complex sites
+        // 2. Retry Mechanism. The robust `setVolume` function now handles all the
+        //    complexities of the AudioContext state.
         const maxRetries = 7;
         const initialDelay = 50; // ms
 
         for (let i = 0; i < maxRetries; i++) {
-            setVolume(element, targetVolume);
+            // Call the new, robust setVolume function. It will handle ensuring
+            // the context is running before applying the volume.
+            await setVolume(element, targetVolume, { isInitial: true });
 
             // Give the browser a moment to apply the change
             await new Promise(resolve => setTimeout(resolve, 25));
 
-            if (mediaMap.has(element)) {
-                const { gainNode } = mediaMap.get(element);
-                // Check if the gain value is close enough to the target
-                if (gainNode && Math.abs(gainNode.gain.value - targetVolume) < 0.01) {
-                    return; // Success
-                }
+            const { gainNode } = mediaMap.get(element) || {};
+            // Check if the gain value is close enough to the target
+            if (gainNode && Math.abs(gainNode.gain.value - targetVolume) < 0.01) {
+                return; // Success
             }
 
             // Exponential backoff for subsequent retries
@@ -75,41 +77,61 @@ if (typeof window.volumeValet === 'undefined') {
     }
 
     // 2. Audio Control: Set Volume via Web Audio API
-    function setVolume(element, volume) {
-        if (!mediaMap.has(element)) return; // Should not happen if called correctly
+
+    // Centralized helper to ensure the AudioContext is running before any operation.
+    async function ensureContextIsRunning(audioContext) {
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
+        // If the context was closed, we can't do anything.
+        if (audioContext.state === 'closed') {
+            throw new Error("AudioContext is closed.");
+        }
+    }
+
+
+    async function setVolume(element, volume, options = {}) {
+        if (!mediaMap.has(element)) return;
 
         const mediaNodes = mediaMap.get(element);
         const { audioContext, source, gainNode, compressor } = mediaNodes;
 
-        if (!audioContext || !source || !gainNode || !compressor) return;
+        if (!audioContext || !gainNode || !compressor) return;
 
-        // Dynamic Audio Graph for "Safe Boost"
-        const isBoosted = volume > 1.0;
+        try {
+            // This is the core of the new architecture. ALWAYS ensure the context is running.
+            await ensureContextIsRunning(audioContext);
 
-        // Avoid reconnecting nodes unnecessarily
-        if (isBoosted && !mediaNodes.isCompressorActive) {
-            source.disconnect();
-            source.connect(compressor).connect(gainNode);
-            mediaNodes.isCompressorActive = true;
-        } else if (!isBoosted && (mediaNodes.isCompressorActive || mediaNodes.isCompressorActive === undefined)) {
-            // The "undefined" check handles the initial connection
-            source.disconnect();
-            source.connect(gainNode);
-            mediaNodes.isCompressorActive = false;
+            const isBoosted = volume > 1.0;
+
+            // The logic for switching the compressor must only run if the source exists.
+            if (source) {
+                if (isBoosted && !mediaNodes.isCompressorActive) {
+                    source.disconnect(gainNode);
+                    source.connect(compressor).connect(gainNode);
+                } else if (!isBoosted && mediaNodes.isCompressorActive) {
+                    source.disconnect(compressor);
+                    source.connect(gainNode);
+                }
+            }
+            mediaNodes.isCompressorActive = isBoosted;
+
+            // Apply the volume setting smoothly. Use a slightly longer ramp for the initial set.
+            const rampTime = options.isInitial ? 0.05 : 0.015;
+            gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, rampTime);
+
+        } catch (error) {
+            // The context was closed, so we can't do anything.
         }
-
-        // Apply the volume setting smoothly
-        gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, 0.015);
     }
 
     // 3. The "Pre-emptive Mute" Handler
     function handleNewMediaElement(element) {
         if (mediaMap.has(element)) return; // Already processing this element
 
-        // Create a unique AudioContext and GainNode for each media element
-        // This is crucial for sites with multiple videos (e.g., Twitter, Reddit)
+        // STAGE 1: Create the downstream audio graph, but NOT the source node.
+        // The source node will only be created when the 'playing' event fires.
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const source = audioContext.createMediaElementSource(element);
         const gainNode = audioContext.createGain();
         const compressor = audioContext.createDynamicsCompressor();
 
@@ -120,31 +142,58 @@ if (typeof window.volumeValet === 'undefined') {
         compressor.attack.setValueAtTime(0.003, audioContext.currentTime); // Fast attack
         compressor.release.setValueAtTime(0.25, audioContext.currentTime); // Smooth release
 
+        // Connect the gain node to the destination. This is crucial for pre-emptive mute.
+        gainNode.connect(audioContext.destination);
+
         // ** PRE-EMPTIVE MUTE **
-        // Mute the element immediately upon detection, before it can play.
+        // Mute the element immediately, even before the source node exists.
         gainNode.gain.value = 0;
 
-        // Connect the gain node to the destination once
-        gainNode.connect(audioContext.destination);
-        // The initial source connection will be handled by the first `setVolume` call
+        // Store the incomplete graph. `source` is null until 'playing' event.
+        mediaMap.set(element, { audioContext, source: null, gainNode, compressor, isCompressorActive: false });
 
-        // Store all nodes for dynamic graph changes
-        mediaMap.set(element, { audioContext, source, gainNode, compressor, isCompressorActive: undefined });
-
-        // Define the handler for when the media is ready to play
-        const onCanPlay = () => {
-            // Resume AudioContext if it was suspended (browser policy)
-            if (audioContext.state === 'suspended') {
-                audioContext.resume();
-            }
-            // Apply the user's saved setting
-            reliableSetInitialVolume(element);
-            // Clean up the event listener after it has served its purpose
-            element.removeEventListener('canplay', onCanPlay);
+        // Define a one-time handler for setting the initial volume once the media is playable.
+        const onCanPlay = async () => {
+            // This function sets the gainNode's value. It doesn't need the source node.
+            await reliableSetInitialVolume(element);
+            element.removeEventListener('canplay', onCanPlay); // Clean up
         };
 
-        // Wait for the 'canplay' event to apply the final volume
+        // Define a one-time handler for creating the source node when playback actually starts.
+        const onPlaying = () => {
+            createAndConnectSource(element); // Stage 2 of initialization
+            element.removeEventListener('playing', onPlaying); // Clean up
+        };
+
+        // Wait for 'canplay' to set the volume and 'playing' to build the final audio path.
         element.addEventListener('canplay', onCanPlay, { once: true });
+        element.addEventListener('playing', onPlaying, { once: true });
+    }
+
+    // STAGE 2: Create the source node and connect it to the existing downstream graph.
+    // This is called by the 'playing' event handler.
+    function createAndConnectSource(element) {
+        if (!mediaMap.has(element)) return;
+
+        const mediaNodes = mediaMap.get(element);
+        const { audioContext, gainNode, compressor } = mediaNodes;
+
+        // If a source already exists, do nothing. This can happen in some edge cases.
+        if (mediaNodes.source) return;
+
+        try {
+            const source = audioContext.createMediaElementSource(element);
+            mediaNodes.source = source; // Update the map with the new source
+
+            // Connect to the correct next node, respecting the current "boost" state.
+            if (mediaNodes.isCompressorActive) {
+                source.connect(compressor);
+            } else {
+                source.connect(gainNode);
+            }
+        } catch (error) {
+            // This can fail if the element is in a bad state.
+        }
     }
 
     // 4. MutationObserver: Detect new media elements added to the page
@@ -176,19 +225,25 @@ if (typeof window.volumeValet === 'undefined') {
             // Re-apply saved settings for all currently tracked media elements
             document.querySelectorAll('video, audio').forEach(element => {
                 if (mediaMap.has(element)) {
-                   applySettings(element);
+                   applySettings(element); // applySettings is async and calls setVolume
                 }
             });
         } else if (message.type === 'setVolume') {
-            // Apply a temporary volume from the popup slider in real-time
+            // Apply a temporary volume from the popup slider in real-time.
+            // This now awaits the robust setVolume function.
             const newVolume = message.value / 100;
+            const promises = [];
             document.querySelectorAll('video, audio').forEach(element => {
                 if (mediaMap.has(element)) {
-                    setVolume(element, newVolume);
+                    promises.push(setVolume(element, newVolume));
                 }
             });
+            Promise.all(promises).then(() => {
+                sendResponse({ success: true });
+            });
+            return true; // Keep the message channel open for the async response
         }
-        return true; // Indicate that the response may be asynchronous
+        return true;
     });
 
     // 6. Utility: URL Normalization
@@ -207,4 +262,14 @@ if (typeof window.volumeValet === 'undefined') {
             return urlString;
         }
     }
+} // End of initialize()
+
+    // Start the version handshake
+    chrome.runtime.sendMessage({ type: 'GET_VERSION' }, (response) => {
+        if (response && response.version === CONTENT_SCRIPT_VERSION) {
+            initialize();
+        } else {
+            console.log('VolumeValet: Mismatched content script version. Disabling self.');
+        }
+    });
 }

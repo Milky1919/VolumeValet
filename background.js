@@ -199,3 +199,11 @@ function normalizeUrl(urlString) {
         return url.origin + url.pathname + url.search;
     } catch (e) { return urlString; }
 }
+
+// Listen for the content script to request the extension's version.
+// This allows content scripts to disable themselves if they are outdated.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'GET_VERSION') {
+        sendResponse({ version: chrome.runtime.getManifest().version });
+    }
+});
