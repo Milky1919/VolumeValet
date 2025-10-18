@@ -94,7 +94,13 @@ if (typeof window.volumeValet === 'undefined') {
         if (!mediaMap.has(element)) return;
 
         const mediaNodes = mediaMap.get(element);
-        const { audioContext, gainNode, compressor } = mediaNodes;
+        const { audioContext, source, gainNode, compressor } = mediaNodes;
+
+        // If the source node hasn't been created yet, queue the volume command.
+        if (!source) {
+            mediaNodes.pendingVolume = volume;
+            return; // Exit early
+        }
 
         if (!audioContext || !gainNode || !compressor) return;
 
@@ -106,25 +112,23 @@ if (typeof window.volumeValet === 'undefined') {
             const rampTime = 0.015; // Standard ramp time for smooth transitions
 
             // Instead of disconnecting, we change the compressor's parameters
-            // to make it either a limiter (for boost) or transparent (for normal volume).
             if (isBoosted) {
                 // Activate the "Safe Boost" limiter
                 compressor.threshold.setTargetAtTime(-10, now, rampTime);
                 compressor.knee.setTargetAtTime(0, now, rampTime);
                 compressor.ratio.setTargetAtTime(20, now, rampTime);
             } else {
-                // Make the compressor transparent by setting non-interfering values
+                // Make the compressor transparent
                 compressor.threshold.setTargetAtTime(0, now, rampTime);
                 compressor.knee.setTargetAtTime(0, now, rampTime);
                 compressor.ratio.setTargetAtTime(1, now, rampTime);
             }
 
-            // Always apply the volume setting smoothly.
             const finalRampTime = options.isInitial ? 0.05 : rampTime;
             gainNode.gain.setTargetAtTime(volume, now, finalRampTime);
 
         } catch (error) {
-            // The context might be closed, in which case we can do nothing.
+            // The context might be closed.
         }
     }
 
@@ -156,8 +160,14 @@ if (typeof window.volumeValet === 'undefined') {
         // Mute the element immediately by setting gain to 0.
         gainNode.gain.value = 0;
 
-        // Store the graph nodes. `source` is null until the 'playing' event.
-        mediaMap.set(element, { audioContext, source: null, gainNode, compressor });
+        // Store the graph nodes. `source` is null and `pendingVolume` is unset.
+        mediaMap.set(element, {
+            audioContext,
+            source: null,
+            gainNode,
+            compressor,
+            pendingVolume: null
+        });
 
         // Define a one-time handler for setting the initial volume when the media can play.
         const onCanPlay = async () => {
@@ -192,6 +202,13 @@ if (typeof window.volumeValet === 'undefined') {
             // Connect the source to the start of our static graph.
             // This is the only `connect` call needed for the source, and it never changes.
             source.connect(compressor);
+
+            // ** FINALIZE QUEUED COMMANDS **
+            // If a volume command was queued while the source was being created, apply it now.
+            if (mediaNodes.pendingVolume !== null && typeof mediaNodes.pendingVolume === 'number') {
+                setVolume(element, mediaNodes.pendingVolume);
+                mediaNodes.pendingVolume = null; // Clear the queue
+            }
 
         } catch (error) {
             // This can fail if the element is in a bad state (e.g., from a different origin).
