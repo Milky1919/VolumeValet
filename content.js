@@ -77,11 +77,29 @@ if (typeof window.volumeValet === 'undefined') {
     // 2. Audio Control: Set Volume via Web Audio API
     function setVolume(element, volume) {
         if (!mediaMap.has(element)) return; // Should not happen if called correctly
-        const { gainNode, audioContext } = mediaMap.get(element);
-        if (gainNode && audioContext) {
-            // Use setTargetAtTime for a smooth transition
-            gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, 0.015);
+
+        const mediaNodes = mediaMap.get(element);
+        const { audioContext, source, gainNode, compressor } = mediaNodes;
+
+        if (!audioContext || !source || !gainNode || !compressor) return;
+
+        // Dynamic Audio Graph for "Safe Boost"
+        const isBoosted = volume > 1.0;
+
+        // Avoid reconnecting nodes unnecessarily
+        if (isBoosted && !mediaNodes.isCompressorActive) {
+            source.disconnect();
+            source.connect(compressor).connect(gainNode);
+            mediaNodes.isCompressorActive = true;
+        } else if (!isBoosted && (mediaNodes.isCompressorActive || mediaNodes.isCompressorActive === undefined)) {
+            // The "undefined" check handles the initial connection
+            source.disconnect();
+            source.connect(gainNode);
+            mediaNodes.isCompressorActive = false;
         }
+
+        // Apply the volume setting smoothly
+        gainNode.gain.setTargetAtTime(volume, audioContext.currentTime, 0.015);
     }
 
     // 3. The "Pre-emptive Mute" Handler
@@ -93,13 +111,25 @@ if (typeof window.volumeValet === 'undefined') {
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const source = audioContext.createMediaElementSource(element);
         const gainNode = audioContext.createGain();
+        const compressor = audioContext.createDynamicsCompressor();
+
+        // Configure the compressor for "Safe Boost" (transparent limiting)
+        compressor.threshold.setValueAtTime(-10, audioContext.currentTime); // Start limiting at -10dB
+        compressor.knee.setValueAtTime(0, audioContext.currentTime);       // No knee, hard limiting
+        compressor.ratio.setValueAtTime(20, audioContext.currentTime);     // Strong compression
+        compressor.attack.setValueAtTime(0.003, audioContext.currentTime); // Fast attack
+        compressor.release.setValueAtTime(0.25, audioContext.currentTime); // Smooth release
 
         // ** PRE-EMPTIVE MUTE **
         // Mute the element immediately upon detection, before it can play.
         gainNode.gain.value = 0;
 
-        source.connect(gainNode).connect(audioContext.destination);
-        mediaMap.set(element, { audioContext, gainNode });
+        // Connect the gain node to the destination once
+        gainNode.connect(audioContext.destination);
+        // The initial source connection will be handled by the first `setVolume` call
+
+        // Store all nodes for dynamic graph changes
+        mediaMap.set(element, { audioContext, source, gainNode, compressor, isCompressorActive: undefined });
 
         // Define the handler for when the media is ready to play
         const onCanPlay = () => {
