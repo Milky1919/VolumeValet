@@ -30,6 +30,50 @@ if (typeof window.volumeValet === 'undefined') {
         setVolume(element, targetVolume);
     }
 
+    // NEW: Reliably set the initial volume with a retry mechanism
+    async function reliableSetInitialVolume(element) {
+        if (!element) return;
+
+        // 1. Determine the target volume from storage
+        const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
+        const domain = window.location.hostname;
+        const pageUrl = normalizeUrl(window.location.href);
+        const pageVolume = siteVolumes[pageUrl];
+        const domainVolume = siteVolumes[domain];
+
+        let targetVolume;
+        if (pageVolume !== undefined) {
+            targetVolume = pageVolume / 100;
+        } else if (domainVolume !== undefined) {
+            targetVolume = domainVolume / 100;
+        } else {
+            targetVolume = 1.0; // Default to 100%
+        }
+
+        // 2. Retry Mechanism to combat race conditions on complex sites
+        const maxRetries = 7;
+        const initialDelay = 50; // ms
+
+        for (let i = 0; i < maxRetries; i++) {
+            setVolume(element, targetVolume);
+
+            // Give the browser a moment to apply the change
+            await new Promise(resolve => setTimeout(resolve, 25));
+
+            if (mediaMap.has(element)) {
+                const { gainNode } = mediaMap.get(element);
+                // Check if the gain value is close enough to the target
+                if (gainNode && Math.abs(gainNode.gain.value - targetVolume) < 0.01) {
+                    return; // Success
+                }
+            }
+
+            // Exponential backoff for subsequent retries
+            const delay = initialDelay * Math.pow(2, i);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+
     // 2. Audio Control: Set Volume via Web Audio API
     function setVolume(element, volume) {
         if (!mediaMap.has(element)) return; // Should not happen if called correctly
@@ -64,7 +108,7 @@ if (typeof window.volumeValet === 'undefined') {
                 audioContext.resume();
             }
             // Apply the user's saved setting
-            applySettings(element);
+            reliableSetInitialVolume(element);
             // Clean up the event listener after it has served its purpose
             element.removeEventListener('canplay', onCanPlay);
         };
