@@ -100,17 +100,18 @@ if (typeof window.volumeValet === 'undefined') {
 
         if (!audioContext || !source || !gainNode || !compressor) return;
 
-        // Dynamic Audio Graph for "Safe Boost"
         const isBoosted = volume > 1.0;
 
-        // Avoid reconnecting nodes unnecessarily
+        // The audio path is now guaranteed to exist. This function only handles CHANGES.
+        // It switches the compressor in or out of the audio path as needed.
         if (isBoosted && !mediaNodes.isCompressorActive) {
-            source.disconnect();
+            // Switch to: source -> compressor -> gain -> destination
+            source.disconnect(gainNode);
             source.connect(compressor).connect(gainNode);
             mediaNodes.isCompressorActive = true;
-        } else if (!isBoosted && (mediaNodes.isCompressorActive || mediaNodes.isCompressorActive === undefined)) {
-            // The "undefined" check handles the initial connection
-            source.disconnect();
+        } else if (!isBoosted && mediaNodes.isCompressorActive) {
+            // Switch back to: source -> gain -> destination
+            source.disconnect(compressor);
             source.connect(gainNode);
             mediaNodes.isCompressorActive = false;
         }
@@ -137,16 +138,16 @@ if (typeof window.volumeValet === 'undefined') {
         compressor.attack.setValueAtTime(0.003, audioContext.currentTime); // Fast attack
         compressor.release.setValueAtTime(0.25, audioContext.currentTime); // Smooth release
 
+        // Establish the default audio path immediately: source -> gain -> destination
+        source.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
         // ** PRE-EMPTIVE MUTE **
-        // Mute the element immediately upon detection, before it can play.
+        // Now that the path is established, mute the element before it can play.
         gainNode.gain.value = 0;
 
-        // Connect the gain node to the destination once
-        gainNode.connect(audioContext.destination);
-        // The initial source connection will be handled by the first `setVolume` call
-
-        // Store all nodes for dynamic graph changes
-        mediaMap.set(element, { audioContext, source, gainNode, compressor, isCompressorActive: undefined });
+        // Store all nodes for dynamic graph changes. Mark compressor as inactive.
+        mediaMap.set(element, { audioContext, source, gainNode, compressor, isCompressorActive: false });
 
         // Define the handler for when the media is ready to play
         const onCanPlay = async () => {
