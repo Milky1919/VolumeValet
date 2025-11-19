@@ -12,20 +12,21 @@
   --pin-icon-active-color: var(--accent-color);
 }
 
-/*
-:root[data-theme="dark"] {
-  --bg-color: #1c1c1e;
-  --text-primary: #f2f2f7;
-  --text-secondary: #8d8d92;
-  --accent-color: #0a84ff;
-  --accent-color-hover: #389dff;
-  --border-color: #3a3a3c;
-  --icon-bg-hover: #2c2c2e;
-  --pinned-indicator: var(--accent-color);
-  --pin-icon-color: var(--text-secondary);
-  --pin-icon-active-color: var(--accent-color);
+/* 【修正】メディアクエリを使ってダークモードを自動適用 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-color: #1c1c1e;
+    --text-primary: #f2f2f7;
+    --text-secondary: #8d8d92;
+    --accent-color: #0a84ff;
+    --accent-color-hover: #389dff;
+    --border-color: #3a3a3c;
+    --icon-bg-hover: #2c2c2e;
+    --pinned-indicator: var(--accent-color);
+    --pin-icon-color: var(--text-secondary);
+    --pin-icon-active-color: var(--accent-color);
+  }
 }
-*/
 
 body {
   font-family: 'Segoe UI', 'Meiryo', sans-serif;
@@ -74,14 +75,17 @@ body.is-page-specific {
   justify-content: center;
   transition: background-color 0.2s;
 }
+
 .pin-button:hover {
   background-color: var(--icon-bg-hover);
 }
+
 .pin-button svg {
   stroke: var(--pin-icon-color);
   fill: none;
   transition: all 0.2s ease-in-out;
 }
+
 .pin-button.active svg {
   fill: var(--pin-icon-active-color);
   stroke: var(--pin-icon-active-color);
@@ -113,7 +117,6 @@ body.is-page-specific {
   cursor: pointer;
 }
 
-/* ▼▼▼ ここからが変更点 ▼▼▼ */
 /* 通常（ドメイン設定）時のつまみのスタイル */
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -134,11 +137,8 @@ body.is-page-specific .slider::-webkit-slider-thumb {
 }
 
 .slider::-webkit-slider-thumb:hover {
-   /* ホバー時のスタイルは共通で少し透明度を変えるなど */
-   opacity: 0.8;
+  opacity: 0.8;
 }
-/* ▲▲▲ ここまでが変更点 ▲▲▲ */
-
 
 .volume-value {
   font-size: 18px;
@@ -148,7 +148,6 @@ body.is-page-specific .slider::-webkit-slider-thumb {
   text-align: right;
 }
 
-
 .actions-area {
   display: flex;
   justify-content: space-between;
@@ -157,46 +156,48 @@ body.is-page-specific .slider::-webkit-slider-thumb {
 }
 
 .action-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .action-button {
-    font-size: 18px;
-    background: none;
-    border: 1px solid transparent;
-    border-radius: 50%;
-    width: 32px;
-    height: 32px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background-color 0.2s;
-    color: var(--text-secondary);
+  font-size: 18px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+  color: var(--text-secondary);
 }
+
 .action-button:hover {
-    background-color: var(--icon-bg-hover);
+  background-color: var(--icon-bg-hover);
 }
 
 .max-volume-label {
-    font-size: 12px;
-    color: var(--text-secondary);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .max-volume-input {
-    width: 50px;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 4px 6px;
-    font-size: 12px;
-    text-align: right;
-    background-color: var(--bg-color);
-    color: var(--text-primary);
+  width: 50px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: right;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
 }
+
 .max-volume-input:focus {
-    outline: 1px solid var(--accent-color);
+  outline: 1px solid var(--accent-color);
 }
 
 .footer {
@@ -210,10 +211,9 @@ body.is-page-specific .slider::-webkit-slider-thumb {
 }
 
 .settings-link {
-    cursor: not-allowed;
-    opacity: 0.6;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+  cursor: not-allowed;
+  opacity: 0.6;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-

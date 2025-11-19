@@ -1,4 +1,4 @@
-// popup.js v1.4.0 (Stable)
+// popup.js v1.4.1 (Reset Behavior Fix)
 
 class PopupApp {
     constructor() {
@@ -19,9 +19,10 @@ class PopupApp {
             pageUrl: null,
             lastVolume: 100,
             settings: {},
-            activeSetting: 'domain'
+            activeSetting: 'domain',
+            isThrottled: false // スロットリング用フラグ
         };
-        
+
         this.initialize();
     }
 
@@ -32,7 +33,7 @@ class PopupApp {
         this.updateUI();
         this.addEventListeners();
     }
-    
+
     async loadCurrentTabInfo() {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tab?.url?.startsWith("http")) {
@@ -75,13 +76,13 @@ class PopupApp {
             this.nodes.body.innerHTML = '<div class="container"><header class="header"><h1 class="title">設定対象外のページ</h1></header></div>';
             return;
         }
-        
+
         const maxVolume = settings.maxVolume || 200;
         this.nodes.maxVolumeInput.value = maxVolume;
         this.nodes.volumeSlider.max = maxVolume;
 
         const siteVolumes = settings.siteVolumes || {};
-        
+
         let currentVolume;
         if (activeSetting === 'page') {
             this.nodes.body.classList.add('is-page-specific');
@@ -94,7 +95,7 @@ class PopupApp {
             this.nodes.modeDisplayHeader.textContent = domain;
             currentVolume = siteVolumes[domain] ?? 100;
         }
-        
+
         if (currentVolume > maxVolume) currentVolume = maxVolume;
 
         this.nodes.volumeSlider.value = currentVolume;
@@ -118,20 +119,30 @@ class PopupApp {
         this.nodes.resetButton.addEventListener('click', this.handleReset.bind(this));
         this.nodes.maxVolumeInput.addEventListener('change', this.handleMaxVolumeChange.bind(this));
     }
-    
+
     handleSliderInput() {
         const volume = parseInt(this.nodes.volumeSlider.value);
         this.nodes.volumeLabel.textContent = `${volume}%`;
         this.updateVolumeIcon(volume);
         this.state.lastVolume = volume > 0 ? volume : this.state.lastVolume;
-        this.sendMessage('setVolume', volume);
+
+        // requestAnimationFrameによるスロットリング
+        if (!this.state.isThrottled) {
+            this.state.isThrottled = true;
+            requestAnimationFrame(() => {
+                this.sendMessage('setVolume', volume);
+                this.state.isThrottled = false;
+            });
+        }
     }
-    
+
     handleSliderChange() {
         const volume = parseInt(this.nodes.volumeSlider.value);
         this.saveSliderValue(volume);
+        // inputイベントで送り損ねた最後の値を確実に送信
+        this.sendMessage('setVolume', volume);
     }
-    
+
     async saveSliderValue(volume) {
         const key = this.state.activeSetting === 'page' ? this.state.pageUrl : this.state.domain;
         if (!key) return;
@@ -166,19 +177,28 @@ class PopupApp {
         this.handleSliderInput();
         this.handleSliderChange(); // Immediately save mute state
     }
-    
+
     async handleReset() {
         const key = this.state.activeSetting === 'page' ? this.state.pageUrl : this.state.domain;
         if (!key) return;
-        
+
         const data = await chrome.storage.local.get('siteVolumes');
         const siteVolumes = data.siteVolumes || {};
-        siteVolumes[key] = 100;
+
+        // 【修正】値を100にするのではなく、設定キーそのものを削除する
+        delete siteVolumes[key];
+
         await chrome.storage.local.set({ siteVolumes });
         this.state.settings.siteVolumes = siteVolumes;
 
+        // 【修正】設定削除に伴い、表示モード（ドメイン/ページ）を再判定する
+        this.determineActiveSetting();
+
         this.updateUI();
         this.sendMessage('setVolume', 100);
+
+        // 【修正】アイコンを即座にグレー（未設定）に戻すため更新を要求
+        chrome.runtime.sendMessage({ action: "refreshIcon" });
     }
 
     async handleMaxVolumeChange(e) {
@@ -189,7 +209,7 @@ class PopupApp {
 
         await chrome.storage.local.set({ maxVolume: newMaxVolume });
         await this.loadAllSettings();
-        
+
         const { siteVolumes = {} } = this.state.settings;
         let changed = false;
         Object.keys(siteVolumes).forEach(key => {
@@ -205,7 +225,7 @@ class PopupApp {
         this.updateUI();
         this.sendMessage('setVolume', parseInt(this.nodes.volumeSlider.value));
     }
-    
+
     sendMessage(type, value) {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (tabs[0]?.id) {
@@ -221,4 +241,3 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.runtime.sendMessage({ action: "refreshIcon" });
     new PopupApp();
 });
-
