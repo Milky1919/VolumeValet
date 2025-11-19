@@ -86,7 +86,8 @@ if (typeof window.volumeValet === 'undefined') {
 
         async function ensureContextIsRunning(audioContext) {
             if (audioContext.state === 'suspended') {
-                await audioContext.resume();
+                // ユーザー操作前でブロックされた場合は、エラーを無視して待機する
+                await audioContext.resume().catch(() => { });
             }
             if (audioContext.state === 'closed') {
                 throw new Error("AudioContext is closed.");
