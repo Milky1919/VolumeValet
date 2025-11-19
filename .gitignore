@@ -1,0 +1,7 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+
+# Test artifacts
+test.html
+test_volume_valet.py

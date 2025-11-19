@@ -42,8 +42,9 @@ if (typeof window.volumeValet === 'undefined') {
         }
 
         // 確実なユーザー操作のみ監視（スクロールは除外）
+        // 一度実行されたら十分なので { once: true } を指定
         ['click', 'keydown', 'touchstart', 'mousedown'].forEach(event => {
-            document.addEventListener(event, () => { tryResumeAndConnect(); }, { capture: true, passive: true });
+            document.addEventListener(event, tryResumeAndConnect, { once: true, capture: true, passive: true });
         });
 
         function connectAllPendingElements() {
@@ -87,51 +88,45 @@ if (typeof window.volumeValet === 'undefined') {
         async function setVolume(element, volume, options = {}) {
             if (!mediaMap.has(element)) return;
 
-            let nodes = mediaMap.get(element);
-
-            // A. まだ接続されていない場合、スライダー操作をきっかけに接続を試みる
-            if (!nodes.source) {
-                await tryResumeAndConnect();
-                // 接続できたか再確認
-                nodes = mediaMap.get(element);
-            }
-
+            const nodes = mediaMap.get(element);
             const { audioContext, gainNode, compressor } = nodes;
             if (!audioContext || !gainNode || !compressor) return;
 
-            // B. 音量適用の実行
-            // ここで「接続できていなくても、数値だけは書き込む」のが重要
+            // 方針3：音量適用ロジックの分離
+            // 1. 数値の書き込み（絶対実行）
+            // 接続状態に関わらず、GainNodeの数値プロパティは必ず上書きする
             try {
                 const now = audioContext.currentTime;
                 const isBoosted = volume > 1.0;
                 const rampTime = options.isInitial ? 0.05 : 0.015;
 
-                // コンプレッサー設定
                 const threshold = isBoosted ? -10 : 0;
                 const ratio = isBoosted ? 20 : 1;
 
-                // ★状態にかかわらず、まずは数値を書き込む（これでスライダー操作が保存される）
-                // 停止中なら即時適用、再生中なら滑らかに
+                // AudioContextが停止中でも、パラメータの予約はエラーにならない
                 if (audioContext.state === 'suspended') {
-                    compressor.threshold.cancelScheduledValues(0);
-                    compressor.threshold.setValueAtTime(threshold, 0);
-                    compressor.knee.cancelScheduledValues(0);
-                    compressor.knee.setValueAtTime(0, 0);
-                    compressor.ratio.cancelScheduledValues(0);
-                    compressor.ratio.setValueAtTime(ratio, 0);
-
                     gainNode.gain.cancelScheduledValues(0);
                     gainNode.gain.setValueAtTime(volume, 0);
+                    compressor.threshold.cancelScheduledValues(0);
+                    compressor.threshold.setValueAtTime(threshold, 0);
+                    compressor.ratio.cancelScheduledValues(0);
+                    compressor.ratio.setValueAtTime(ratio, 0);
                 } else {
-                    compressor.threshold.setTargetAtTime(threshold, now, rampTime);
-                    compressor.knee.setTargetAtTime(0, now, rampTime);
-                    compressor.ratio.setTargetAtTime(ratio, now, rampTime);
-                    
                     gainNode.gain.setTargetAtTime(volume, now, rampTime);
+                    compressor.threshold.setTargetAtTime(threshold, now, rampTime);
+                    compressor.ratio.setTargetAtTime(ratio, now, rampTime);
                 }
+                compressor.knee.cancelScheduledValues(0);
+                compressor.knee.setValueAtTime(0, 0);
 
             } catch (error) {
                 // Context issue
+            }
+
+            // 2. 接続の試行（条件付き実行）
+            // 数値を書き込んだ後で、未接続であれば接続を試みる
+            if (!nodes.source) {
+                await tryResumeAndConnect();
             }
         }
 
