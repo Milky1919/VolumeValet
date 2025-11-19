@@ -1,4 +1,4 @@
-// popup.js v1.4.0 (Stable)
+// popup.js v1.4.1 (Reset Behavior Fix)
 
 class PopupApp {
     constructor() {
@@ -20,7 +20,7 @@ class PopupApp {
             lastVolume: 100,
             settings: {},
             activeSetting: 'domain',
-            isThrottled: false // 【修正】スロットリング用フラグ
+            isThrottled: false // スロットリング用フラグ
         };
 
         this.initialize();
@@ -126,7 +126,7 @@ class PopupApp {
         this.updateVolumeIcon(volume);
         this.state.lastVolume = volume > 0 ? volume : this.state.lastVolume;
 
-        // 【修正】requestAnimationFrameによるスロットリング
+        // requestAnimationFrameによるスロットリング
         if (!this.state.isThrottled) {
             this.state.isThrottled = true;
             requestAnimationFrame(() => {
@@ -139,7 +139,7 @@ class PopupApp {
     handleSliderChange() {
         const volume = parseInt(this.nodes.volumeSlider.value);
         this.saveSliderValue(volume);
-        // inputイベントで送り損ねた最後の値を確実に送信するため、ここでも送信
+        // inputイベントで送り損ねた最後の値を確実に送信
         this.sendMessage('setVolume', volume);
     }
 
@@ -184,12 +184,21 @@ class PopupApp {
 
         const data = await chrome.storage.local.get('siteVolumes');
         const siteVolumes = data.siteVolumes || {};
-        siteVolumes[key] = 100;
+
+        // 【修正】値を100にするのではなく、設定キーそのものを削除する
+        delete siteVolumes[key];
+
         await chrome.storage.local.set({ siteVolumes });
         this.state.settings.siteVolumes = siteVolumes;
 
+        // 【修正】設定削除に伴い、表示モード（ドメイン/ページ）を再判定する
+        this.determineActiveSetting();
+
         this.updateUI();
         this.sendMessage('setVolume', 100);
+
+        // 【修正】アイコンを即座にグレー（未設定）に戻すため更新を要求
+        chrome.runtime.sendMessage({ action: "refreshIcon" });
     }
 
     async handleMaxVolumeChange(e) {
