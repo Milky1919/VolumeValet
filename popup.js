@@ -1,4 +1,4 @@
-// popup.js v1.4.0 (Stable)
+// popup.js v1.5.1
 
 class PopupApp {
     constructor() {
@@ -19,7 +19,8 @@ class PopupApp {
             pageUrl: null,
             lastVolume: 100,
             settings: {},
-            activeSetting: 'domain'
+            activeSetting: 'domain',
+            isThrottled: false // スロットリング用フラグ
         };
         
         this.initialize();
@@ -124,12 +125,22 @@ class PopupApp {
         this.nodes.volumeLabel.textContent = `${volume}%`;
         this.updateVolumeIcon(volume);
         this.state.lastVolume = volume > 0 ? volume : this.state.lastVolume;
-        this.sendMessage('setVolume', volume);
+        
+        // 【修正】requestAnimationFrameによるスロットリング
+        if (!this.state.isThrottled) {
+            this.state.isThrottled = true;
+            requestAnimationFrame(() => {
+                this.sendMessage('setVolume', volume);
+                this.state.isThrottled = false;
+            });
+        }
     }
     
     handleSliderChange() {
         const volume = parseInt(this.nodes.volumeSlider.value);
         this.saveSliderValue(volume);
+        // inputイベントで送り損ねた最後の値を確実に送信
+        this.sendMessage('setVolume', volume);
     }
     
     async saveSliderValue(volume) {
@@ -173,12 +184,20 @@ class PopupApp {
         
         const data = await chrome.storage.local.get('siteVolumes');
         const siteVolumes = data.siteVolumes || {};
-        siteVolumes[key] = 100;
+        
+        // 【修正】リセット時は設定キー自体を削除する
+        delete siteVolumes[key];
+        
         await chrome.storage.local.set({ siteVolumes });
         this.state.settings.siteVolumes = siteVolumes;
 
+        // モード再判定（ページ設定を消した場合はドメイン設定に戻るため）
+        this.determineActiveSetting();
+
         this.updateUI();
         this.sendMessage('setVolume', 100);
+        // アイコンを即座に更新
+        chrome.runtime.sendMessage({ action: "refreshIcon" });
     }
 
     async handleMaxVolumeChange(e) {
@@ -221,4 +240,3 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.runtime.sendMessage({ action: "refreshIcon" });
     new PopupApp();
 });
-

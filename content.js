@@ -1,289 +1,248 @@
-const CONTENT_SCRIPT_VERSION = "1.5.0";
+const CONTENT_SCRIPT_VERSION = "1.5.1";
 
 // Prevent multiple initializations
 if (typeof window.volumeValet === 'undefined') {
-    window.volumeValet = true; // Simple flag to prevent re-injection
+    window.volumeValet = true;
 
     function initialize() {
-        const mediaMap = new WeakMap(); // Tracks media elements and their associated audio nodes
+        const mediaMap = new WeakMap();
 
-    // 1. Core Logic: Apply Volume Settings
-    async function applySettings(element) {
-        if (!element) return;
+        // AudioContext Singleton
+        let sharedAudioContext = null;
 
-        const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
-        const domain = window.location.hostname;
-        // The normalizeUrl function in content.js must be kept in sync with background.js
-        const pageUrl = normalizeUrl(window.location.href);
-
-        const pageVolume = siteVolumes[pageUrl];
-        const domainVolume = siteVolumes[domain];
-
-        let targetVolume;
-        if (pageVolume !== undefined) {
-            targetVolume = pageVolume / 100;
-        } else if (domainVolume !== undefined) {
-            targetVolume = domainVolume / 100;
-        } else {
-            targetVolume = 1.0; // Default to 100% if no setting is found
+        function getSharedAudioContext() {
+            if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+                sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            return sharedAudioContext;
         }
 
-        setVolume(element, targetVolume);
-    }
+        // ▼▼▼ 接続・復帰ロジック ▼▼▼
+        // ユーザー操作があった時だけ、エンジンの起動と接続を試みる
+        async function tryResumeAndConnect() {
+            const ctx = getSharedAudioContext();
 
-    // NEW: Reliably set the initial volume with a retry mechanism
-    async function reliableSetInitialVolume(element) {
-        if (!element || !mediaMap.has(element)) return;
-
-        // 1. Determine the target volume from storage
-        const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
-        const domain = window.location.hostname;
-        const pageUrl = normalizeUrl(window.location.href);
-        const pageVolume = siteVolumes[pageUrl];
-        const domainVolume = siteVolumes[domain];
-
-        let targetVolume;
-        if (pageVolume !== undefined) {
-            targetVolume = pageVolume / 100;
-        } else if (domainVolume !== undefined) {
-            targetVolume = domainVolume / 100;
-        } else {
-            targetVolume = 1.0; // Default to 100%
-        }
-
-        // 2. Retry Mechanism. The robust `setVolume` function now handles all the
-        //    complexities of the AudioContext state.
-        const maxRetries = 7;
-        const initialDelay = 50; // ms
-
-        for (let i = 0; i < maxRetries; i++) {
-            // Call the new, robust setVolume function. It will handle ensuring
-            // the context is running before applying the volume.
-            await setVolume(element, targetVolume, { isInitial: true });
-
-            // Give the browser a moment to apply the change
-            await new Promise(resolve => setTimeout(resolve, 25));
-
-            const { gainNode } = mediaMap.get(element) || {};
-            // Check if the gain value is close enough to the target
-            if (gainNode && Math.abs(gainNode.gain.value - targetVolume) < 0.01) {
-                return; // Success
+            // 1. エンジンが止まっていたら起動を試みる
+            if (ctx.state === 'suspended') {
+                try {
+                    await ctx.resume();
+                } catch (e) {
+                    // 起動に失敗（ブラウザにブロックされた）場合は、
+                    // 無理に接続せず終了する（これで動画スタックを防ぐ）
+                    return false;
+                }
             }
 
-            // Exponential backoff for subsequent retries
-            const delay = initialDelay * Math.pow(2, i);
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
-    }
-
-    // 2. Audio Control: Set Volume via Web Audio API
-
-    // Centralized helper to ensure the AudioContext is running before any operation.
-    async function ensureContextIsRunning(audioContext) {
-        if (audioContext.state === 'suspended') {
-            await audioContext.resume();
-        }
-        // If the context was closed, we can't do anything.
-        if (audioContext.state === 'closed') {
-            throw new Error("AudioContext is closed.");
-        }
-    }
-
-
-    async function setVolume(element, volume, options = {}) {
-        if (!mediaMap.has(element)) return;
-
-        const mediaNodes = mediaMap.get(element);
-        const { audioContext, source, gainNode, compressor } = mediaNodes;
-
-        if (!source || !audioContext || !gainNode || !compressor) return;
-
-        try {
-            await ensureContextIsRunning(audioContext);
-
-            const isBoosted = volume > 1.0;
-            const now = audioContext.currentTime;
-            const rampTime = 0.015; // Standard ramp time for smooth transitions
-
-            // Instead of disconnecting, we change the compressor's parameters
-            if (isBoosted) {
-                // Activate the "Safe Boost" limiter
-                compressor.threshold.setTargetAtTime(-10, now, rampTime);
-                compressor.knee.setTargetAtTime(0, now, rampTime);
-                compressor.ratio.setTargetAtTime(20, now, rampTime);
-            } else {
-                // Make the compressor transparent
-                compressor.threshold.setTargetAtTime(0, now, rampTime);
-                compressor.knee.setTargetAtTime(0, now, rampTime);
-                compressor.ratio.setTargetAtTime(1, now, rampTime);
+            // 2. エンジンが動いているなら、未接続の要素をすべて接続する
+            if (ctx.state === 'running') {
+                connectAllPendingElements();
+                return true;
             }
-
-            const finalRampTime = options.isInitial ? 0.05 : rampTime;
-            gainNode.gain.setTargetAtTime(volume, now, finalRampTime);
-
-        } catch (error) {
-            // The context might be closed.
+            return false;
         }
-    }
 
-    // 3. Audio Graph Initialization
-    function handleNewMediaElement(element) {
-        if (mediaMap.has(element)) return; // Already processing this element
-
-        // STAGE 1: Create the audio context and downstream nodes.
-        // This allows for pre-emptive muting before the media source is ready.
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const gainNode = audioContext.createGain();
-        const compressor = audioContext.createDynamicsCompressor();
-
-        // The audio graph is now STATIC: Compressor -> Gain -> Destination.
-        // The source will be connected to the compressor in Stage 2.
-        compressor.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-
-        // Default the compressor to be transparent (not limiting).
-        // The setVolume function will adjust this as needed.
-        const now = audioContext.currentTime;
-        compressor.threshold.setValueAtTime(0, now);
-        compressor.knee.setValueAtTime(0, now);
-        compressor.ratio.setValueAtTime(1, now);
-        compressor.attack.setValueAtTime(0.003, now);
-        compressor.release.setValueAtTime(0.25, now);
-
-        // ** PRE-EMPTIVE MUTE **
-        // Mute the element immediately by setting gain to 0.
-        gainNode.gain.value = 0;
-
-        // Store the graph nodes. `source` is null and `pendingVolume` is unset.
-        mediaMap.set(element, {
-            audioContext,
-            source: null,
-            gainNode,
-            compressor,
-            pendingVolume: null
+        // 確実なユーザー操作のみ監視（スクロールは除外）
+        ['click', 'keydown', 'touchstart', 'mousedown'].forEach(event => {
+            document.addEventListener(event, () => { tryResumeAndConnect(); }, { capture: true, passive: true });
         });
 
-        // Define a one-time handler for creating the source node when playback begins.
-        const onPlaying = () => {
-            createAndConnectSource(element); // Stage 2: Connect the media element
-            element.removeEventListener('playing', onPlaying); // Clean up
-        };
-
-        // Fallback for sites where 'playing' does not fire reliably on load.
-        const onTimeUpdate = () => {
-            // As soon as playback starts (currentTime > 0), try to connect the source.
-            if (element.currentTime > 0) {
-                createAndConnectSource(element);
-                // Once connected, this listener is no longer needed.
-                element.removeEventListener('timeupdate', onTimeUpdate);
-            }
-        };
-
-        element.addEventListener('playing', onPlaying, { once: true });
-        element.addEventListener('timeupdate', onTimeUpdate);
-    }
-
-    // STAGE 2: Create the media source and connect it to the static graph.
-    function createAndConnectSource(element) {
-        if (!mediaMap.has(element)) return;
-
-        const mediaNodes = mediaMap.get(element);
-        const { audioContext, compressor } = mediaNodes;
-
-        // Do nothing if the source already exists.
-        if (mediaNodes.source) return;
-
-        try {
-            const source = audioContext.createMediaElementSource(element);
-            mediaNodes.source = source; // Store the source node
-
-            // Connect the source to the start of our static graph.
-            // This is the only `connect` call needed for the source, and it never changes.
-            source.connect(compressor);
-
-            // With the source connected, immediately apply the correct volume.
-            // This replaces the unreliable 'canplay' event handler.
-            reliableSetInitialVolume(element);
-
-        } catch (error) {
-            // This can fail if the element is in a bad state (e.g., from a different origin).
-        }
-    }
-
-    // 4. MutationObserver: Detect new media elements added to the page
-    const observer = new MutationObserver((mutations) => {
-        for (const mutation of mutations) {
-            for (const node of mutation.addedNodes) {
-                if (node.nodeType === 1) { // ELEMENT_NODE
-                    if (node.matches('video, audio')) {
-                        handleNewMediaElement(node);
+        function connectAllPendingElements() {
+            document.querySelectorAll('video, audio').forEach(element => {
+                if (mediaMap.has(element)) {
+                    const nodes = mediaMap.get(element);
+                    // まだソースが繋がっていない場合のみ接続
+                    if (!nodes.source) {
+                        createAndConnectSource(element);
                     }
-                    node.querySelectorAll('video, audio').forEach(handleNewMediaElement);
                 }
+            });
+        }
+        // ▲▲▲▲▲▲
+
+        // 1. Core Logic
+        async function applySettings(element) {
+            if (!element) return;
+            const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
+            const pageUrl = normalizeUrl(window.location.href);
+            const domain = window.location.hostname;
+            let targetVolume = 1.0;
+            if (siteVolumes[pageUrl] !== undefined) targetVolume = siteVolumes[pageUrl] / 100;
+            else if (siteVolumes[domain] !== undefined) targetVolume = siteVolumes[domain] / 100;
+            
+            setVolume(element, targetVolume);
+        }
+
+        // Reliable set
+        async function reliableSetInitialVolume(element) {
+            if (!element || !mediaMap.has(element)) return;
+            await applySettings(element);
+            // 念のため数回リトライ
+            for (let i = 0; i < 3; i++) {
+                await new Promise(r => setTimeout(r, 100));
+                await applySettings(element);
             }
         }
-    });
 
-    // Start observing the entire document
-    observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-    });
+        // ▼▼▼ 音量適用ロジック（ここが修正の要） ▼▼▼
+        async function setVolume(element, volume, options = {}) {
+            if (!mediaMap.has(element)) return;
 
-    // Initial scan for media elements already present on the page
-    document.querySelectorAll('video, audio').forEach(handleNewMediaElement);
+            let nodes = mediaMap.get(element);
 
-    // 5. Message Listener: Handle commands from the background script or popup
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.type === 'URL_CHANGED' || message.type === 'SYNC_VOLUME') {
-            // Re-apply saved settings for all currently tracked media elements
-            document.querySelectorAll('video, audio').forEach(element => {
-                if (mediaMap.has(element)) {
-                   applySettings(element); // applySettings is async and calls setVolume
+            // A. まだ接続されていない場合、スライダー操作をきっかけに接続を試みる
+            if (!nodes.source) {
+                await tryResumeAndConnect();
+                // 接続できたか再確認
+                nodes = mediaMap.get(element);
+            }
+
+            const { audioContext, gainNode, compressor } = nodes;
+            if (!audioContext || !gainNode || !compressor) return;
+
+            // B. 音量適用の実行
+            // ここで「接続できていなくても、数値だけは書き込む」のが重要
+            try {
+                const now = audioContext.currentTime;
+                const isBoosted = volume > 1.0;
+                const rampTime = options.isInitial ? 0.05 : 0.015;
+
+                // コンプレッサー設定
+                const threshold = isBoosted ? -10 : 0;
+                const ratio = isBoosted ? 20 : 1;
+
+                // ★状態にかかわらず、まずは数値を書き込む（これでスライダー操作が保存される）
+                // 停止中なら即時適用、再生中なら滑らかに
+                if (audioContext.state === 'suspended') {
+                    compressor.threshold.cancelScheduledValues(0);
+                    compressor.threshold.setValueAtTime(threshold, 0);
+                    compressor.knee.cancelScheduledValues(0);
+                    compressor.knee.setValueAtTime(0, 0);
+                    compressor.ratio.cancelScheduledValues(0);
+                    compressor.ratio.setValueAtTime(ratio, 0);
+
+                    gainNode.gain.cancelScheduledValues(0);
+                    gainNode.gain.setValueAtTime(volume, 0);
+                } else {
+                    compressor.threshold.setTargetAtTime(threshold, now, rampTime);
+                    compressor.knee.setTargetAtTime(0, now, rampTime);
+                    compressor.ratio.setTargetAtTime(ratio, now, rampTime);
+                    
+                    gainNode.gain.setTargetAtTime(volume, now, rampTime);
                 }
-            });
-        } else if (message.type === 'setVolume') {
-            // Apply a temporary volume from the popup slider in real-time.
-            // This now awaits the robust setVolume function.
-            const newVolume = message.value / 100;
-            const promises = [];
-            document.querySelectorAll('video, audio').forEach(element => {
-                if (mediaMap.has(element)) {
-                    promises.push(setVolume(element, newVolume));
-                }
-            });
-            Promise.all(promises).then(() => {
-                sendResponse({ success: true });
-            });
-            return true; // Keep the message channel open for the async response
-        }
-        return true;
-    });
 
-    // 6. Utility: URL Normalization
-    function normalizeUrl(urlString) {
-        try {
-            const url = new URL(urlString);
-            // This list MUST be kept in sync with background.js
-            const paramsToRemove = ['t', 'si', 'feature', 'list', 'index', 'ab_channel'];
-            url.searchParams.forEach((value, key) => {
-                if (key.startsWith('utm_') || paramsToRemove.includes(key)) {
-                    url.searchParams.delete(key);
-                }
-            });
-            return url.origin + url.pathname + url.search;
-        } catch (e) {
-            return urlString;
+            } catch (error) {
+                // Context issue
+            }
         }
-    }
-} // End of initialize()
 
-    // Start the version handshake
-    chrome.runtime.sendMessage({ type: 'GET_VERSION' }, (response) => {
-        if (response && response.version === CONTENT_SCRIPT_VERSION) {
-            initialize();
-        } else {
-            console.log('VolumeValet: Mismatched content script version. Disabling self.');
+        function handleNewMediaElement(element) {
+            if (mediaMap.has(element)) return;
+
+            const ctx = getSharedAudioContext();
+            const gain = ctx.createGain();
+            const comp = ctx.createDynamicsCompressor();
+
+            // 下流グラフのみ構築
+            comp.connect(gain);
+            gain.connect(ctx.destination);
+
+            // 初期値
+            gain.gain.value = 1.0; 
+
+            mediaMap.set(element, {
+                audioContext: ctx,
+                source: null, // 未接続
+                gainNode: gain,
+                compressor: comp
+            });
+
+            element._volumeValetCleanup = () => {
+                cleanUpMediaElement(element);
+            };
+
+            // 【重要】自動接続（playingイベントでの接続）は削除済み。
+            // これによりリロード直後のスタックを完全回避。
         }
+
+        function createAndConnectSource(element) {
+            if (!mediaMap.has(element)) return;
+            const nodes = mediaMap.get(element);
+            if (nodes.source) return;
+
+            try {
+                const source = nodes.audioContext.createMediaElementSource(element);
+                nodes.source = source;
+                source.connect(nodes.compressor);
+                
+                // 接続できたので音量を適用
+                reliableSetInitialVolume(element);
+            } catch (e) {
+                // CORSエラー等
+            }
+        }
+
+        function cleanUpMediaElement(element) {
+            if (!mediaMap.has(element)) return;
+            const nodes = mediaMap.get(element);
+            try {
+                if (nodes.source) nodes.source.disconnect();
+                nodes.gainNode.disconnect();
+                nodes.compressor.disconnect();
+            } catch(e) {}
+            mediaMap.delete(element);
+        }
+
+        // Observer
+        const observer = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                m.addedNodes.forEach(n => {
+                    if (n.nodeType === 1) {
+                        if (n.matches('video, audio')) handleNewMediaElement(n);
+                        n.querySelectorAll('video, audio').forEach(handleNewMediaElement);
+                    }
+                });
+                m.removedNodes.forEach(n => {
+                    if (n.nodeType === 1) {
+                        if (n.matches('video, audio')) {
+                            if (n._volumeValetCleanup) n._volumeValetCleanup();
+                        }
+                        n.querySelectorAll('video, audio').forEach(child => {
+                             if (child._volumeValetCleanup) child._volumeValetCleanup();
+                        });
+                    }
+                });
+            }
+        });
+
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        document.querySelectorAll('video, audio').forEach(handleNewMediaElement);
+
+        // Message Listener
+        chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+            if (msg.type === 'URL_CHANGED' || msg.type === 'SYNC_VOLUME') {
+                document.querySelectorAll('video, audio').forEach(applySettings);
+            } else if (msg.type === 'setVolume') {
+                const vol = msg.value / 100;
+                const promises = [];
+                document.querySelectorAll('video, audio').forEach(el => {
+                    promises.push(setVolume(el, vol));
+                });
+                Promise.all(promises).then(() => sendResponse({ success: true }));
+                return true; 
+            }
+        });
+
+        function normalizeUrl(urlString) {
+            try {
+                const url = new URL(urlString);
+                const params = ['t', 'si', 'feature', 'list', 'index', 'ab_channel'];
+                params.forEach(k => url.searchParams.delete(k));
+                return url.origin + url.pathname + url.search;
+            } catch (e) { return urlString; }
+        }
+    } 
+
+    chrome.runtime.sendMessage({ type: 'GET_VERSION' }, (res) => {
+        if (res && res.version === CONTENT_SCRIPT_VERSION) initialize();
     });
 }

@@ -12,21 +12,6 @@
   --pin-icon-active-color: var(--accent-color);
 }
 
-/*
-:root[data-theme="dark"] {
-  --bg-color: #1c1c1e;
-  --text-primary: #f2f2f7;
-  --text-secondary: #8d8d92;
-  --accent-color: #0a84ff;
-  --accent-color-hover: #389dff;
-  --border-color: #3a3a3c;
-  --icon-bg-hover: #2c2c2e;
-  --pinned-indicator: var(--accent-color);
-  --pin-icon-color: var(--text-secondary);
-  --pin-icon-active-color: var(--accent-color);
-}
-*/
-
 body {
   font-family: 'Segoe UI', 'Meiryo', sans-serif;
   margin: 0;
@@ -113,7 +98,6 @@ body.is-page-specific {
   cursor: pointer;
 }
 
-/* ▼▼▼ ここからが変更点 ▼▼▼ */
 /* 通常（ドメイン設定）時のつまみのスタイル */
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -134,11 +118,8 @@ body.is-page-specific .slider::-webkit-slider-thumb {
 }
 
 .slider::-webkit-slider-thumb:hover {
-   /* ホバー時のスタイルは共通で少し透明度を変えるなど */
    opacity: 0.8;
 }
-/* ▲▲▲ ここまでが変更点 ▲▲▲ */
-
 
 .volume-value {
   font-size: 18px;
@@ -147,7 +128,6 @@ body.is-page-specific .slider::-webkit-slider-thumb {
   min-width: 50px;
   text-align: right;
 }
-
 
 .actions-area {
   display: flex;
@@ -217,3 +197,18 @@ body.is-page-specific .slider::-webkit-slider-thumb {
     gap: 4px;
 }
 
+/* ダークモード対応 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-color: #1c1c1e;
+    --text-primary: #f2f2f7;
+    --text-secondary: #8d8d92;
+    --accent-color: #0a84ff;
+    --accent-color-hover: #389dff;
+    --border-color: #3a3a3c;
+    --icon-bg-hover: #2c2c2e;
+    --pinned-indicator: var(--accent-color);
+    --pin-icon-color: var(--text-secondary);
+    --pin-icon-active-color: var(--accent-color);
+  }
+}

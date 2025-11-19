@@ -1,4 +1,4 @@
-// background.js v1.4.1 (SPA Navigation Fix)
+// background.js v1.5.1
 
 let creating;
 async function setupOffscreenDocument(path) {
@@ -31,30 +31,30 @@ async function updateIconForTab(tabId) {
             return;
         }
 
-    const url = new URL(tab.url);
-    const domain = url.hostname;
-    const pageUrl = normalizeUrl(tab.url);
+        const url = new URL(tab.url);
+        const domain = url.hostname;
+        const pageUrl = normalizeUrl(tab.url);
 
-    const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
+        const { siteVolumes = {} } = await chrome.storage.local.get('siteVolumes');
 
-    const pageVolume = siteVolumes[pageUrl];
-    const domainVolume = siteVolumes[domain];
+        const pageVolume = siteVolumes[pageUrl];
+        const domainVolume = siteVolumes[domain];
 
-    let iconState;
-    if (pageVolume !== undefined) {
-        iconState = pageVolume === 0 ? 'pageMute' : 'pageSet';
-    } else if (domainVolume !== undefined) {
-        iconState = domainVolume === 0 ? 'domainMute' : 'domainSet';
-    } else {
-        iconState = 'unset';
-    }
+        let iconState;
+        if (pageVolume !== undefined) {
+            iconState = pageVolume === 0 ? 'pageMute' : 'pageSet';
+        } else if (domainVolume !== undefined) {
+            iconState = domainVolume === 0 ? 'domainMute' : 'domainSet';
+        } else {
+            iconState = 'unset';
+        }
     
         await drawIcon(iconState, tabId);
         chrome.action.setBadgeText({ text: '', tabId: tabId });
 
     } catch (error) {
         if (error.message.includes('No tab with id') || error.message.includes('Invalid tab ID')) {
-            // Tab was closed, ignore the error.
+            // Tab was closed, ignore.
         } else {
             console.error("Failed to update icon:", error);
         }
@@ -101,29 +101,19 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    // SPAサイトでのURL変更時、またはタブの読み込みが完了した時
     if (changeInfo.url || changeInfo.status === 'complete') {
-        // content.jsに設定の再適用を指示
         chrome.tabs.sendMessage(tabId, { type: 'URL_CHANGED' }).catch(() => {});
-        // アイコンも更新
         updateIconForTab(tabId);
     }
 });
 
+// 【修正】設定変更時に全タブを走査して同期する
 chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace !== 'local' || !changes.siteVolumes) return;
 
     const oldVolumes = changes.siteVolumes.oldValue || {};
     const newVolumes = changes.siteVolumes.newValue || {};
 
-    // アイコンの更新は常に実行
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs && tabs[0]) {
-            updateIconForTab(tabs[0].id);
-        }
-    });
-
-    // 変更されたキーを特定
     let changedKey = null;
     for (const key in newVolumes) {
         if (newVolumes[key] !== oldVolumes[key]) {
@@ -131,7 +121,6 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
             break;
         }
     }
-    // 新規追加だけでなく、削除された場合も考慮
     if (!changedKey) {
         for (const key in oldVolumes) {
             if (!(key in newVolumes)) {
@@ -143,48 +132,32 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
     if (!changedKey) return;
 
-    const newVolume = newVolumes[changedKey]; // Can be undefined if the key was deleted
+    const newVolume = newVolumes[changedKey];
+    const isSpecificUrl = changedKey.includes('/');
 
-    // Check if the change is for a specific page URL or a domain
-    if (changedKey.includes('/')) {
-        // Change is for a specific URL.
-        // Query all tabs, normalize their URLs, and sync the ones that match.
-        const targetUrl = changedKey;
-        chrome.tabs.query({}, (tabs) => {
-            for (const tab of tabs) {
-                if (tab.url && normalizeUrl(tab.url) === targetUrl) {
-                    chrome.tabs.sendMessage(tab.id, {
-                        type: 'SYNC_VOLUME',
-                        volume: newVolume
-                    }).catch(() => {
-                        // console.log(`Could not send message to tab ${tab.id}`);
-                    });
-                }
+    // 全タブをチェック
+    chrome.tabs.query({}, (tabs) => {
+        for (const tab of tabs) {
+            if (!tab.url) continue;
+
+            let shouldSync = false;
+            if (isSpecificUrl) {
+                if (normalizeUrl(tab.url) === changedKey) shouldSync = true;
+            } else {
+                try {
+                    const url = new URL(tab.url);
+                    if (url.hostname === changedKey) shouldSync = true;
+                } catch (e) {}
             }
-        });
-    } else {
-        // Change is for a domain, sync all tabs under that domain
-        const changedDomain = changedKey;
-        chrome.tabs.query({}, (tabs) => {
-            for (const tab of tabs) {
-                if (tab.url) {
-                    try {
-                        const url = new URL(tab.url);
-                        if (url.hostname === changedDomain) {
-                            chrome.tabs.sendMessage(tab.id, {
-                                type: 'SYNC_VOLUME',
-                                volume: newVolume
-                            }).catch(() => {
-                                // console.log(`Could not send message to tab ${tab.id}`);
-                            });
-                        }
-                    } catch (e) {
-                        // console.warn(`Invalid URL: ${tab.url}`);
-                    }
-                }
+
+            if (shouldSync) {
+                // 音量の同期
+                chrome.tabs.sendMessage(tab.id, { type: 'SYNC_VOLUME', volume: newVolume }).catch(() => {});
+                // アイコンの更新
+                updateIconForTab(tab.id);
             }
-        });
-    }
+        }
+    });
 });
 
 function normalizeUrl(urlString) {
@@ -200,8 +173,6 @@ function normalizeUrl(urlString) {
     } catch (e) { return urlString; }
 }
 
-// Listen for the content script to request the extension's version.
-// This allows content scripts to disable themselves if they are outdated.
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'GET_VERSION') {
         sendResponse({ version: chrome.runtime.getManifest().version });
